@@ -9,7 +9,7 @@ description: >-
   (may need an out-of-band / device-code login, which it relays) and warms the cache.
   Do NOT call GitHub or run git/gh until this reports SUCCESS.
 argument-hint: "[optional: a repo URL to warm, e.g. https://github.com/OWNER/REPO.git]"
-allowed-tools: Bash, Read
+allowed-tools: Bash Read
 user-invocable: true
 shell: bash
 ---

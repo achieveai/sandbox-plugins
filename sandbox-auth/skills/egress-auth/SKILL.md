@@ -232,4 +232,4 @@ Rules for warming:
 ## Reference
 
 For the full architecture (proxy → gateway → auth-webhook flow, the exact 511/403 wire
-contracts, and the injected env vars), read `references/architecture.md`.
+contracts, and the injected env vars), read `${CLAUDE_PLUGIN_ROOT}/references/architecture.md`.

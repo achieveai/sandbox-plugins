@@ -11,6 +11,14 @@ Add this marketplace to Claude Code:
 /plugin marketplace add achieveai/sandbox-plugins
 ```
 
+> **Private-repo prerequisite:** the `owner/repo` shorthand clones over **SSH by default**. Either
+> load a GitHub SSH key in `ssh-agent`, or run `gh auth setup-git` once to register an HTTPS
+> credential helper and set `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` to clone over HTTPS instead. For
+> more reliable background auto-updates against this private repo, also set
+> `CLAUDE_CODE_PLUGIN_KEEP_MARKETPLACE_ON_FAILURE=1`. See the
+> [private repositories docs](https://code.claude.com/docs/en/plugin-marketplaces#private-repositories)
+> for details.
+
 Then install a plugin from it:
 
 ```

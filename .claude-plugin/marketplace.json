@@ -4,7 +4,7 @@
     "name": "Gautam Bhakar"
   },
   "metadata": {
-    "description": "A marketplace for custom plugins and skills",
+    "description": "Extensible Claude Code plugin marketplace for skills used in Sandbox",
     "version": "1.0.0"
   },
   "plugins": [

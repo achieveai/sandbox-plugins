@@ -10,7 +10,7 @@ description: >-
   Microsoft Graph use sandbox-auth:microsoft-graph. Do NOT call the target API until this
   reports SUCCESS.
 argument-hint: <probe URL, e.g. "https://api.github.com/user">
-allowed-tools: Bash, Read
+allowed-tools: Bash Read
 user-invocable: true
 shell: bash
 ---

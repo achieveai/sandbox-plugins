@@ -32,9 +32,9 @@ logs/
 .env.local
 .env.*.local
 
-# Build outputs
-dist/
-build/
+# Build outputs (repo root only — a plugin's own dist/ or build/ output is not ignored)
+/dist/
+/build/
 *.egg-info/
 
 # OS files
@@ -46,8 +46,10 @@ Thumbs.db
 *.temp
 .cache/
 
-# MCP server config (user-specific)
-.mcp.json
+# Local root-level MCP config (user-specific dev config for this repo itself).
+# Anchored to the root so a plugin's own .mcp.json (a standard, trackable plugin
+# component — see CLAUDE.md) is never silently dropped.
+/.mcp.json
 
 # Test coverage
 coverage/
@@ -63,5 +65,5 @@ htmlcov/
 scratchpad/**
 !scratchpad/README.md
 
-# Inspiration reference repos (use scripts/clone-inspirations.sh to populate)
+# Inspiration reference repos (not tracked in this repository)
 inspirations/

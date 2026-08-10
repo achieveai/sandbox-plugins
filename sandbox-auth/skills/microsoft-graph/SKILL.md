@@ -11,7 +11,7 @@ description: >-
   skill owns both: the auth handshake (delegated to egress-auth) and per-domain recipes under
   reference/. Do NOT guess Graph endpoints or call Graph before auth reports SUCCESS.
 argument-hint: "[optional: space-separated Graph scopes, e.g. 'User.Read Mail.Read']"
-allowed-tools: Bash, Read
+allowed-tools: Bash Read
 user-invocable: true
 shell: bash
 ---

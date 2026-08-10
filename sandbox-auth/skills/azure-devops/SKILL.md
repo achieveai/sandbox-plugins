@@ -9,7 +9,7 @@ description: >-
   Azure AD login / consent, which it relays). Do NOT make Azure DevOps API calls until
   this reports SUCCESS.
 argument-hint: <organization name, e.g. "myorg">
-allowed-tools: Bash, Read
+allowed-tools: Bash Read
 user-invocable: true
 shell: bash
 ---
@@ -29,8 +29,8 @@ injection, and exit-code handling — is owned by the **`sandbox-auth:egress-aut
 Pick in this priority order, then hand the URL to `egress-auth`:
 
 a. **A specific target the user named** (a repo, PR list, work-item query, build) — probe THAT
-   URL, so you verify the exact permission they need. Example: PRs in `contoso/_git/sample-repo` →
-   `https://contoso.visualstudio.com/contoso/_apis/git/repositories/sample-repo/pullrequests?api-version=7.0&searchCriteria.status=active`
+   URL, so you verify the exact permission they need. Example: PRs in `sample-project/_git/sample-repo` →
+   `https://contoso.visualstudio.com/sample-project/_apis/git/repositories/sample-repo/pullrequests?api-version=7.0&searchCriteria.status=active`
 
 b. **Otherwise, if an org name is given** — probe the **project-list** endpoint (project-level,
    accessible to any org member):

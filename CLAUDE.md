@@ -37,9 +37,12 @@ name: skill-name               # Required. Lowercase + hyphens. Must match direc
 description: >                  # Required. Max 1024 chars. What it does AND when to use it.
   Describe the skill's purpose and trigger conditions here.
 license: MIT                    # Optional.
-allowed-tools:                  # Optional. Pre-approved tools list.
-  - Read
+allowed-tools:                  # Optional. Pre-approved tools list. Accepts a YAML list, or a
+  - Read                        # space- or comma-separated string (e.g. "Bash Read" / "Bash, Read").
   - Grep
+argument-hint: <hint text>      # Optional. Autocomplete hint shown for the skill's argument.
+user-invocable: true            # Optional. Whether the skill appears in the `/` command menu.
+shell: bash                     # Optional. Shell dialect (`bash` | `powershell`) for inline shell blocks.
 metadata:                       # Optional. Custom key-value pairs.
   category: development
 ---
