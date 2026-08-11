@@ -67,3 +67,6 @@ scratchpad/**
 
 # Inspiration reference repos (not tracked in this repository)
 inspirations/
+
+# Git worktrees
+.worktrees/
