@@ -1,4 +1,4 @@
-# `azure-devops` plugin — CLI-native migration of the ADO workflow
+# `azure-devops` plugin — CLI-native **port** of the `ado` plugin
 
 **Date:** 2026-08-11 · **Status:** Approved. Ready to implement. No open decisions.
 **Source:** `B:\sources\claude_plugins`, plugin `ado/` v3.1.5 — **read-only, never modified**
@@ -9,8 +9,28 @@
 
 ## Executive summary
 
-**Goal.** Port the whole ADO workflow into this marketplace as a self-contained plugin. Transform the
-transport. Do not rewrite the workflows.
+**Goal.** **Port** `claude_plugins/ado` into this marketplace as a self-contained plugin, with
+`ado-cli.js` as the execution context. Change the transport. Keep the plugin.
+
+**Porting principle — the governing rule of this spec.**
+
+> This is a **port, not a redesign.** The source plugin's skill/agent/command inventory, workflow
+> boundaries, prompts, orchestration, state machines, references, and behavior are preserved exactly,
+> wherever they do not depend on the MCP server or the `development` plugin.
+>
+> **Only these transform:** MCP tool call / MCP setup → direct `node ado-cli.js` invocation; stale CLI
+> method names; auth warming; `development:*` delegation → inlined behavior; component naming;
+> privacy and portability.
+>
+> **Nothing else.** No new workflow decomposition. No generic or extracted skills. No redesigned
+> responsibilities. No renamed phases. If a change is not on the transform list above, it is out of
+> scope — even if it looks like an improvement.
+
+**Naming.** The plugin name already namespaces every component as
+`azure-devops:{skill|agent|command}`. **Component names therefore never repeat `azure-devops` or
+`ado`.** Skills are `work-on`, `publish-pr`, `babysit-pr`, `draft-work-item`, `work-items`,
+`work-my-backlog`, `mentions`. Agents are `assistant`, `pr-tender`, `babysit-pr-worker`. Commands
+match their skills. Full old → new table: [Component mapping](#component-mapping).
 
 **Architecture.** CLI-native. Skills shell out to a bundled `ado-cli.js`. Nothing else.
 
@@ -27,8 +47,9 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" <method> --structured <<'ADOJSON
 ADOJSON
 ```
 
-**Workflows included — all of them.** 8 skills, 3 agents, 5 commands (the 6th, `setup-ado-mcp`, is
-dropped). Same phases, same gates, same decision logic as the source plugin.
+**Workflows included — all of them.** 7 skills, 3 agents, 5 commands. The 8th skill and 6th command
+(`setup-ado-mcp`) are dropped because they configure an MCP server that does not exist here. Same
+phases, same gates, same decision logic, same prompts as the source plugin.
 
 **Auth.** `sandbox-auth` only. The egress proxy injects the credential server-side.
 
@@ -46,7 +67,7 @@ dropped). Same phases, same gates, same decision logic as the source plugin.
 | Never read stderr as failure | It is non-empty on **success**. Branch on exit code + stdout. |
 | Never pass `--input -` | Not a stdin sentinel. It opens a file literally named `-`. |
 
-**Files.** `plugin.json`, `CLAUDE.md`, `README.md`, 6 references, 2 scripts, 8 skills, 3 agents,
+**Files.** `plugin.json`, `CLAUDE.md`, `README.md`, 6 references, 2 scripts, 7 skills, 3 agents,
 5 commands. Full tree: [File inventory](#file-inventory).
 
 **Release gates.** V1 plugin validates · V2 CLI intact · V3 method refs resolve · V4 self-contained ·
@@ -60,50 +81,98 @@ credential-free. Detail: [Appendix C](#appendix-c--release-verification-detail).
 | D1 | Transport | Direct `ado-cli.js` invocation. No adapter. |
 | D2 | Tests | None. Verification is validation + review, **not** a test suite under another name. |
 | D3 | Who resolves PR threads | Autonomous worker **may**, after applying **and verifying**. Interactive tender **never**. |
-| D4 | Routing agent name | **`ado-assistant`** — named exception to prefixing. Not `azure-devops-devops-assistant` (stutters), not `azure-devops-assistant`. |
+| D4 | Component naming | The plugin name namespaces everything. **Component names carry no `azure-devops` or `ado` prefix.** Routing agent is **`assistant`** → `azure-devops:assistant`. **This supersedes the earlier `ado-assistant` decision** and its "named exception to prefixing" rationale — there is no prefixing rule left to except. |
 | D5 | Auth | `sandbox-auth` only. Zero PAT surface. |
-| D6 | `work-on` / `draft-work-item` | Inline the `development:*` steps. Do not reimplement that framework. |
+| D6 | `work-on` / `draft-work-item` | Inline the `development:*` steps. Do not reimplement that framework, and do not redesign around it. |
 | D7 | Version | Fresh at `1.0.0`. Do not continue `3.1.5`. |
 | D8 | Mutation policy enforcement | Instruction-level in `CLAUDE.md`. No runtime block exists. |
+| D9 | Scope discipline | Port, not redesign. See the porting principle above. |
+
+## Component mapping
+
+Exact old → new. Every source component is accounted for. Directory and file basenames drop the
+`ado-` prefix; nothing else about them changes.
+
+| Kind | Source (`claude_plugins/ado`) | This plugin | Invoked as | Transform applied |
+|---|---|---|---|---|
+| Skill | `skills/ado-work-on/` | `skills/work-on/` | `azure-devops:work-on` | R2, R6 |
+| Skill | `skills/ado-publish-pr/` | `skills/publish-pr/` | `azure-devops:publish-pr` | R2 |
+| Skill | `skills/ado-babysit-pr/` | `skills/babysit-pr/` | `azure-devops:babysit-pr` | R2 |
+| Skill | `skills/ado-draft-work-item/` | `skills/draft-work-item/` | `azure-devops:draft-work-item` | R2, R6, R8 |
+| Skill | `skills/ado-work-items/` | `skills/work-items/` | `azure-devops:work-items` | R2, R8 |
+| Skill | `skills/ado-work-my-backlog/` | `skills/work-my-backlog/` | `azure-devops:work-my-backlog` | R2, R9 |
+| Skill | `skills/ado-mentions/` | `skills/mentions/` | `azure-devops:mentions` | none — verbatim |
+| Skill | `skills/setup-ado-mcp/` | **dropped** | — | R10 |
+| Agent | `agents/ado-devops-assistant.md` | `agents/assistant.md` | `azure-devops:assistant` | R2, R12 |
+| Agent | `agents/ado-pr-tender.md` | `agents/pr-tender.md` | `azure-devops:pr-tender` | R2, R7, R12 |
+| Agent | `agents/ado-babysit-pr-worker.md` | `agents/babysit-pr-worker.md` | `azure-devops:babysit-pr-worker` | R2, R7, R12 |
+| Command | `commands/ado-work-on.md` | `commands/work-on.md` | `/work-on` | R2 |
+| Command | `commands/ado-publish-pr.md` | `commands/publish-pr.md` | `/publish-pr` | R2 |
+| Command | `commands/ado-babysit-pr.md` | `commands/babysit-pr.md` | `/babysit-pr` | R2 |
+| Command | `commands/ado-draft-work-item.md` | `commands/draft-work-item.md` | `/draft-work-item` | R2 |
+| Command | `commands/ado-work-my-backlog.md` | `commands/work-my-backlog.md` | `/work-my-backlog` | R2 |
+| Command | `commands/setup-ado-mcp.md` | **dropped** | — | R10 |
+| Reference | `references/ado-mention-conventions.md` | same name | — | none — verbatim |
+| Reference | `references/review-reception-protocol.md` | same name | — | none — verbatim |
+| Reference | `references/review-thread-state-machine.md` | same name | — | R7 |
+| Reference | *(from `development`)* `ado-state-transitions.md` | `references/ado-state-transitions.md` | — | copied in, R6 |
+| Script | `scripts/ado-cli.js` | same name | — | none — byte-identical |
+| Script | `skills/ado-work-my-backlog/scripts/ado-api.mjs` | `skills/work-my-backlog/scripts/ado-api.mjs` | — | R9 |
+| Script | `…/scripts/{classify,scan,state}.mjs` | same names | — | none — verbatim |
+
+**Reference and script *filenames* keep their `ado-` prefix.** They are not components, are not
+namespaced, and are referenced by path from ported prompts. Renaming them would be a redesign edit
+with no benefit and would break the verbatim-copy property. Only skills, agents, and commands — the
+things the namespace prefixes — lose the prefix.
 
 ## What changes / What does not change
 
-**Changes:**
+**Changes — the complete transform list. Nothing outside it:**
 
 - Transport: MCP tool call → `node ado-cli.js <method> --structured` with JSON on stdin.
-- Auth: `ado:setup-ado-mcp` (writes a PAT into an MCP config) → `sandbox-auth`. Deleted, not ported.
-- Namespace: `ado:` → `azure-devops:`; file basenames `ado-*` → `azure-devops-*` (except D4).
-- `work-on` / `draft-work-item`: `development:*` delegations become inline instructions.
+- Auth: `ado:setup-ado-mcp` (writes a PAT into an MCP config) → `sandbox-auth`. Dropped, not ported.
+- Naming: `ado:` → `azure-devops:`; component basenames drop the `ado-` prefix entirely (D4).
+- Stale CLI method names corrected (R8).
+- `work-on` / `draft-work-item`: `development:*` delegations inlined — same steps, same order.
 - `ado-api.mjs`: direct `fetch` + PAT header removed; it spawns the CLI instead.
 - Dropped: `examples/`, `launch-ado-mcp.sh`, `setup-ado-mcp` skill + command.
 - Version resets to `1.0.0`.
 
 **Does not change:**
 
-- Method names. `getWorkItemById` stays `getWorkItemById`. Same params, same order, same meaning.
-- Every skill's phases, gates, decision logic, and outcome contracts.
+- **The inventory.** Same skills, same agents, same commands. Nothing merged, split, extracted, or
+  added.
+- **The workflow boundaries.** Which skill owns which job is exactly as the source plugin has it.
+- **The prompts.** Wording, headings, phase names, tables, and examples are carried over as-is except
+  where a transform above touches the line.
+- **The orchestration and state machines.** Phase order, branch conditions, retry and revision caps,
+  thread lifecycle, sub-agent dispatch shape.
+- **Method names.** `getWorkItemById` stays `getWorkItemById`. Same params, same order, same meaning.
 - The HITL feedback checkpoint, the v3 revision cap, append-only comments.
 - Agent frontmatter shape (`modelintelligence` + `effort`, **not** `model`).
 - `claude_plugins`. Nothing is committed, staged, edited, or squashed there. The bundle is **copied
   out**, never moved.
 
+
 ## Problem
 
 The source plugin (8 skills, 3 agents, 6 commands) is built entirely on the
-`@achieveai/azuredevops-mcp` MCP server. Nothing about that fits here:
+`@achieveai/azuredevops-mcp` MCP server. The workflows are good; the transport is unusable here:
 
 - No MCP server registration surface exists in a sandboxed session. This marketplace is CLI/skill-native.
 - The egress proxy injects auth transparently. A "write a token into a config file" skill is actively wrong here.
-- There is no `development` plugin here, and `ado-work-on` / `ado-draft-work-item` are thin wrappers on it.
+- There is no `development` plugin here, and `ado-work-on` / `ado-draft-work-item` delegate to it.
 
-What makes the port possible: `ado/scripts/ado-cli.js`, an 87,719-line esbuild bundle of the same
+So the problem is narrow: **swap the transport and the two external dependencies, keep everything
+else.** What makes that possible: `ado/scripts/ado-cli.js`, an 87,719-line esbuild bundle of the same
 TypeScript project exposing the same 130 tools through a `node ado-cli.js <method>` contract — same
-`registerTools()`, same Zod schemas. **Self-sufficient:** no wrapper, no per-tool shim.
+`registerTools()`, same Zod schemas. **Self-sufficient:** no wrapper, no per-tool shim. Because the
+tool surface is identical, the prompts that call it need only their call syntax changed.
 
 **Why not MCP.** `web-research.md`'s "Plugin Architecture for Sandbox" section recommends an Express
 MCP server (`mcp/server.json` + a Node HTTP listener) for exactly this. **Overridden, permanently.**
-No port to bind usefully, no client to register with, and it reintroduces the dependency this
-migration removes.
+No port to bind usefully, no client to register with, and it reintroduces the dependency this port
+removes.
 
 ## Canonical invocation form
 
@@ -175,7 +244,7 @@ Both checks are idempotent no-ops in a correctly configured sandbox.
 
 ## Data flow
 
-1. A user or the model invokes an `azure-devops-*` skill, directly or via its command.
+1. A user or the model invokes an `azure-devops:*` skill, directly or via its command.
 2. First ADO touchpoint runs the session warm-up: proxy/CA precondition check, then
    `sandbox-auth:azure-devops` (soft — full handshake only if a call actually failed with an auth
    error).
@@ -211,9 +280,9 @@ Both checks are idempotent no-ops in a correctly configured sandbox.
 
 ## Mutation policy
 
-Invoking an `azure-devops-*` skill already authorizes the ordinary mutations that skill performs. No
+Invoking an `azure-devops:*` skill already authorizes the ordinary mutations that skill performs. No
 new gate is added on top of what the source plugin does today. Extra confirmation applies only to the
-exceptional: destructive, irreversible, or outside what any migrated skill uses.
+exceptional: destructive, irreversible, or outside what any ported skill uses.
 
 **Enforced by instruction, not by code (D8).** No adapter, so no code path can refuse a call. The tiers
 live in `azure-devops/CLAUDE.md`, are restated at the step inside each skill that could trip them, and
@@ -224,24 +293,24 @@ of a runtime guarantee for removing a whole layer of code. Recorded in
 
 | Tier | Scope | Rule |
 |---|---|---|
-| **1 — Ordinary** | Exactly the methods migrated files reference by name | Proceed. No new gate. |
+| **1 — Ordinary** | Exactly the methods ported files reference by name | Proceed. No new gate. |
 | **2 — Forbidden** | `manageWorkItemComment` with `action: "update"` or `"delete"` | **Never invoke**, by any skill, agent, command, or script. To correct a comment, post a new one. |
 | **3 — Confirm first** | Destructive, or out-of-scope | Ask explicitly, naming the action and the resource, before invoking. Proceed only on an affirmative. |
 
-- **Tier 3, destructive by nature** — regardless of whether a migrated skill calls it:
+- **Tier 3, destructive by nature** — regardless of whether a ported skill calls it:
   `mergePullRequest`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, `runPipeline`,
   overwrite-style `createOrUpdateWikiPage`, any bulk create/update/delete.
-- **Tier 3, out-of-scope catch-all** — any method not referenced by name in any migrated file
+- **Tier 3, out-of-scope catch-all** — any method not referenced by name in any ported file
   (cross-checked against `method-catalog.md`). A method no shipped skill uses is exceptional by
   definition, even if it looks benign.
 - **Tier 1 is a definition, not a hand-maintained list.** It *is* the referenced set. V3 checks that
   the `CLAUDE.md` list equals what the files reference, so it cannot drift — either direction is a
   release-time finding. Enumeration + two encoded corrections:
   [Appendix A](#appendix-a--tier-1-method-inventory).
-- Tier 2's method name appears in no migrated file except as the subject of the prohibition, so V3 and
+- Tier 2's method name appears in no ported file except as the subject of the prohibition, so V3 and
   V6 both surface any reintroduction.
-- Skills that already confirm before creating/updating (`azure-devops-work-items`' "always confirm
-  before making changes", `azure-devops-draft-work-item`'s mandatory preview) keep those prompts
+- Skills that already confirm before creating/updating (`work-items`' "always confirm
+  before making changes", `draft-work-item`'s mandatory preview) keep those prompts
   exactly as-is. This layer does not touch them.
 
 ## Error handling
@@ -288,55 +357,64 @@ azure-devops/
 │   ├── ado-cli.js                      verbatim from ado/scripts/ado-cli.js
 │   └── provenance.json                 new — origin, byte size, content hash, copy date
 ├── skills/
-│   ├── azure-devops-work-on/
+│   ├── work-on/
 │   │   ├── SKILL.md                    from ado-work-on — inline-not-delegate, R6
 │   │   └── reference/                  generic guides from development/skills/work-on/reference/
-│   ├── azure-devops-publish-pr/SKILL.md
-│   ├── azure-devops-babysit-pr/SKILL.md
-│   ├── azure-devops-draft-work-item/SKILL.md   inline-not-delegate, R6
-│   ├── azure-devops-work-items/SKILL.md
-│   ├── azure-devops-work-my-backlog/
-│   │   ├── SKILL.md
+│   ├── publish-pr/SKILL.md             from ado-publish-pr
+│   ├── babysit-pr/SKILL.md             from ado-babysit-pr
+│   ├── draft-work-item/SKILL.md        from ado-draft-work-item — inline-not-delegate, R6
+│   ├── work-items/SKILL.md             from ado-work-items
+│   ├── work-my-backlog/
+│   │   ├── SKILL.md                    from ado-work-my-backlog
 │   │   └── scripts/{ado-api.mjs,classify.mjs,scan.mjs,state.mjs}   see R9
-│   └── azure-devops-mentions/SKILL.md
+│   └── mentions/SKILL.md               from ado-mentions, verbatim
 ├── agents/
-│   ├── azure-devops-babysit-pr-worker.md
-│   ├── azure-devops-pr-tender.md
-│   └── ado-assistant.md                from ado-devops-assistant — D4 exception
+│   ├── babysit-pr-worker.md            from ado-babysit-pr-worker.md
+│   ├── pr-tender.md                    from ado-pr-tender.md
+│   └── assistant.md                    from ado-devops-assistant.md — D4
 └── commands/
-    └── azure-devops-{work-on,publish-pr,babysit-pr,draft-work-item,work-my-backlog}.md
+    └── {work-on,publish-pr,babysit-pr,draft-work-item,work-my-backlog}.md
 ```
+
+Same count, same names, same responsibilities as the source — minus the prefix, minus
+`setup-ado-mcp`. Full correspondence: [Component mapping](#component-mapping).
 
 **Deliberately absent:** `tests/`, `package.json`, `scripts/invoke-ado-cli.mjs`, `mcp/`, `examples/`,
 `launch-ado-mcp.sh`, any `setup-ado-mcp` component. The only two files under `scripts/` are the
 vendored bundle and its provenance record.
 
-## Migration rules
+## Port rules
+
+Each rule is a member of the transform list in the [porting principle](#executive-summary). Nothing
+outside these rules changes.
 
 | # | Rule |
 |---|---|
-| **R1** | **Namespace + basename prefix only.** `ado:` → `azure-devops:`; `ado-x` → `azure-devops-x` (`ado-work-on/SKILL.md` → `azure-devops-work-on/SKILL.md`), so names stay unambiguous in a multi-plugin marketplace. No procedure, phase structure, or decision logic is rewritten. **Exception (D4):** mechanical prefixing produces a stuttering `azure-devops-devops-assistant`; the routing agent ships as **`ado-assistant`** — the only bare `ado-` component name, carried in V4 as an explicit allowed name. |
-| **R2** | **MCP tool call → direct CLI call, mechanically.** Every "call `<toolName>`" becomes `node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" <toolName> --structured` with the same parameters, same order, same purpose, per the [canonical form](#canonical-invocation-form). Method names unchanged. Nothing to import. |
+| **R1** | **Namespace only. No basename prefix.** `ado:` → `azure-devops:`, and component basenames simply **drop** `ado-`: `skills/ado-work-on/` → `skills/work-on/`, `agents/ado-pr-tender.md` → `agents/pr-tender.md`, `commands/ado-publish-pr.md` → `commands/publish-pr.md`. The plugin name already qualifies every component as `azure-devops:<name>`, so re-stating it in the name is pure stutter and `ado-` is a stale namespace. `ado-devops-assistant` → **`assistant`** (`azure-devops:assistant`) falls straight out of the same rule — no exception needed (D4). Reference and script *filenames* (`ado-cli.js`, `ado-api.mjs`, `ado-mention-conventions.md`, `ado-state-transitions.md`) are not components, are not namespaced, and keep their names. No procedure, phase structure, or decision logic is rewritten. |
+| **R2** | **MCP tool call → direct CLI call, mechanically.** Every "call `<toolName>`" becomes `node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" <toolName> --structured` with the same parameters, same order, same purpose, per the [canonical form](#canonical-invocation-form). Method names unchanged. Nothing to import. Surrounding prompt text is left alone. |
 | **R3** | **`CLAUDE.md` carries forward and gains three jobs.** "Comments Are Append-Only" copied verbatim. "MCP Prerequisite — Auto-Setup" replaced per [Authentication](#authentication-and-environment). Because there is no adapter, it is now also the single home for (a) the canonical invocation form, (b) the session warm-up preamble, (c) the full three-tier mutation policy. One always-loaded file replaces the "one file tells you the whole policy" property the adapter used to give. |
-| **R4** | `ado-mentions` → `azure-devops-mentions`, copied verbatim. Prefix only. |
-| **R5** | `ado-publish-pr`, `ado-babysit-pr`, `ado-work-items`, `ado-work-my-backlog` migrate **1:1** — same phases, same decision logic. Only R2 and R8 touch them. |
+| **R4** | `ado-mentions` → `mentions`, copied **verbatim**. Directory rename only; body untouched. |
+| **R5** | `ado-publish-pr`, `ado-babysit-pr`, `ado-work-items`, `ado-work-my-backlog` port **1:1** — same phases, same decision logic, same wording. Only R1, R2, R8 and (for the backlog skill) R9 touch them. |
 | **R8** | **Stale method names fixed.** `ado-work-items/SKILL.md` line 27 and `ado-draft-work-item`'s Duplicate Check table both name **`searchWorkItems`, which does not exist** among the 130 real methods. Replacement is **`listWorkItems`** — the catalog calls it the *"preferred structured work item query path. Usually 1 WIQL call plus 1 batched hydrate call for up to 200 returned items,"* exactly what the stale name reached for. Line 27 already names `listWorkItems` alongside it, so **drop the `or searchWorkItems` clause** rather than substitute. Per call site, consider `getMyWorkItems` (assigned-to-me) or `getQueryResults` (saved queries) instead of a blind swap. General cross-check is V3. |
-| **R10** | Drop MCP-only artifacts: `examples/`, `launch-ado-mcp.sh`, `setup-ado-mcp` skill + command. |
+| **R10** | Drop MCP-only artifacts: `examples/`, `launch-ado-mcp.sh`, `setup-ado-mcp` skill + command. They exist only to configure the MCP server. |
 | **R11** | `plugin.json` starts at `"version": "1.0.0"`. The `3.1.5` lineage is not continued — same pattern this repo used for `sandbox`. |
 
 ### R6 — `work-on` / `draft-work-item`: inline, do not delegate
+
+The most invasive rule, and still not a redesign: the phase structure is preserved exactly and only
+the delegation *targets* change.
 
 Their only ADO-specific content is the "Azure DevOps" column of their `GitHub | Azure DevOps` tables
 plus the provider-resolution/tooling phases. Everything else delegates to `development:work-on` /
 `development:draft-work-item`, absent here — which in turn delegate to `development:autonomous-design`,
 `:implement`, `:blind-spot-detector`, `:draft-feature`, `:draft-bug`, `debugging:debug-with-logs`,
 `debugging:systematic-debugging`, `code-reviewer:pr-review`. Also absent. Reimplementing that framework
-is out of scope.
+is out of scope; so is restructuring these skills to avoid it.
 
 - **Keep the full phase structure verbatim:** Phase 0 provider resolution (→ a no-op single-provider
   statement), 1 auto-detect mode, 1.1 fetch & understand, 1.2 route by type, **the mandatory Phase 1.5
   feedback checkpoint**, Part 2 execute & deliver, Error Handling, Reference Conventions, Decision Log.
-  Every ADO-column cell kept.
+  Every ADO-column cell kept. No phase is renamed, merged, split, or reordered.
 - **Replace each `development:X` delegation with inline instructions doing the same step**, using the
   agent's own reasoning and standard tools (Read/Write/Edit/Grep/Glob/Bash/git) rather than a name that
   would not resolve:
@@ -353,21 +431,21 @@ is out of scope.
 - Provider-agnostic tables collapse to the ADO column. The GitHub column and its `gh:*` refs drop.
 - **Copy in the generic reference guides** these skills reach via `development`'s `reference/` — bug RCA
   workflow, plan/RCA comment formats, decision-log guide, git-worktree and branch-completion guides —
-  into `azure-devops-work-on/reference/`. Provider-neutral beyond the tables above.
+  into `skills/work-on/reference/`. Provider-neutral beyond the tables above.
 - **`ado-state-transitions.md` also comes from `development`, not `ado/`.** Verified: the source
   `references/` holds exactly three files (`ado-mention-conventions.md`, `review-reception-protocol.md`,
   `review-thread-state-machine.md`). This one lives at
   `development/skills/work-on/reference/ado-state-transitions.md`, consumed by `development:work-on`
-  when its provider is ADO. `azure-devops-work-on` absorbs that behavior, so copy it in. Only
-  `ado-mention-conventions.md` is genuinely native to the source plugin.
+  when its provider is ADO. `work-on` absorbs that behavior, so copy it in under its original filename.
+  Only `ado-mention-conventions.md` is genuinely native to the source plugin.
 
 ### R7 — `review-thread-state-machine.md`: two fixes
 
 **(a) Dangling sync note.** The source opens with "this lifecycle is copied into the code-reviewer and
 ADO plugins; the copies must remain byte-identical." `code-reviewer` does not exist here, so the claim
 dangles. Replace with: *"this lifecycle document describes the PR-review thread conventions this
-plugin's `azure-devops-babysit-pr-worker` agent follows; it originated as a shared reference with a
-`code-reviewer` plugin that is not part of this marketplace."*
+plugin's `babysit-pr-worker` agent follows; it originated as a shared reference with a `code-reviewer`
+plugin that is not part of this marketplace."*
 
 **(b) Rule 1 — three-way contradiction, resolved (D3).** The two agents contradict **each other**, not
 merely a shared doc:
@@ -389,6 +467,9 @@ defeats the loop it exists to run. A human is present for the tender; resolution
 - Tender's `<do_not_resolve>` kept **verbatim** — now consistent rather than in tension.
 - Restated in `azure-devops/CLAUDE.md` so it loads every session, not only when the file is read.
 
+This is the one place the port resolves a contradiction rather than carrying it. It is in scope because
+the two source files cannot both be ported faithfully — they disagree.
+
 ### R9 — `ado-api.mjs`: remove direct PAT auth
 
 `ado-work-my-backlog/scripts/ado-api.mjs`'s `getAuthHeader()` reads all three PAT env vars and builds
@@ -403,6 +484,8 @@ CLI and contradicts D5.
   JSON body parameters, not header/URL construction.
 - **`fetchBuildFailureLogs()` calls `getAuthHeader()` directly, outside `adoFetch()`** — rewrite it too.
   Removing `adoFetch()` alone leaves a live PAT read behind.
+- **Function names, exports, and call sites stay as they are.** This is a transport swap inside existing
+  functions, not a refactor.
 - `scan.mjs`, `classify.mjs`, `state.mjs` unchanged — they consume return values, not transport.
 
 The one place invocation is code rather than instruction. **Not an adapter:** local to `ado-api.mjs`,
@@ -414,17 +497,17 @@ Verified: all three source agents share `name`, `description`, `user-invocable: 
 `disable-model-invocation: false`, `modelintelligence` (`5` for the babysit worker, `1` for the other
 two), `effort` (`high`/`xhigh`), and `skills: [ado-mentions]`. Three consequences:
 
-- **`skills: - ado-mentions` → `skills: - azure-devops-mentions` in all three.** R4 renames the
-  directory; miss this and all three agents silently lose the skill at load time. **This is the one
-  cross-reference V4's namespace grep cannot catch** — `ado-mentions` carries no colon. Hence V4's
-  second, colon-free check.
-- **`name` must match the filename** — so `name: ado-assistant` in `agents/ado-assistant.md` (D4), not
-  `azure-devops-devops-assistant`.
+- **`skills: - ado-mentions` → `skills: - mentions` in all three.** R4 renames the directory; miss this
+  and all three agents silently lose the skill at load time. **This is the one cross-reference V4's
+  namespace grep cannot catch** — `ado-mentions` carries no colon. Hence V4's second, colon-free check.
+- **`name` must match the filename** — `name: assistant` in `agents/assistant.md`, `name: pr-tender` in
+  `agents/pr-tender.md`, `name: babysit-pr-worker` in `agents/babysit-pr-worker.md`. No prefixes (D4).
 - **Do not add a `model` field.** These agents use `modelintelligence` + `effort`. An earlier draft
-  required "matching name/model fields," which every migrated agent would violate. This differs from
+  required "matching name/model fields," which every ported agent would violate. This differs from
   the frontmatter example in this repo's root `CLAUDE.md` (`model:`/`tools:`/`permissionMode:`); the
   source shape is preserved, because rewriting model-selection semantics is not part of a transport
-  migration.
+  port.
+- `description` bodies carry over as written. They are the trigger text the source plugin tuned.
 
 ## Known limitations
 
@@ -434,7 +517,7 @@ Carried into v1.0.0 deliberately. Documented rather than hidden.
 |---|---|
 | **No independent provenance** | The bundle is untracked in the source repo (`claude_plugins/ado/scripts/`) — no git history, no publisher/package identity, no version pin beyond "whatever the working tree has." `provenance.json` records byte size, content hash, copy date, and that its origin is an untracked build artifact rather than a published release. A supply-chain honesty note for future maintainers, not a functional defect. Does not block v1.0.0. |
 | **Narrower auth surface** | Only `--pat` and no-flag are reachable. Entra / az-cli / interactive / on-prem modes the MCP server supported are structurally unavailable. Not a regression — this design only ever needed no-flag — but on-prem interactive login is impossible. |
-| **Bundle is unreviewable** | 87,719 lines; it cannot be meaningfully reviewed line-by-line as part of this migration. Treated as a vendored third-party dependency: pinned by hash, exercised via its own introspection, trusted at its documented interface. |
+| **Bundle is unreviewable** | 87,719 lines; it cannot be meaningfully reviewed line-by-line as part of this port. Treated as a vendored third-party dependency: pinned by hash, exercised via its own introspection, trusted at its documented interface. |
 | **Mutation policy is not enforced** | D8. A determined or confused model could invoke `manageWorkItemComment action:"delete"` despite the prohibition. The direct cost of the no-adapter architecture, accepted knowingly: the source plugin has the same property today, the alternative was a whole runtime layer, and the highest-risk case is bounded and visible in ADO history. Stated so a maintainer reading "hard-blocked" in an old draft does not assume a control that does not exist. |
 | **CA trust is unverified** | The transport is statically established and `NODE_EXTRA_CA_CERTS` is the correct mechanism, but every release check is offline by design, so nothing reaches the network. The first real call in a real sandbox is where CA trust is proven. Failure symptom: TLS validation error surfacing as `E_TRANSPORT`. Fallback: `requestOptions.ca` / explicit-agent configuration. Update this spec before release rather than patching at runtime. |
 
@@ -446,8 +529,11 @@ Carried into v1.0.0 deliberately. Documented rather than hidden.
   CLI-native Azure DevOps workflow automation (work items, PRs, backlog processing) via the bundled
   ado-cli, sandbox-auth-only authentication, no MCP server, no PAT interface>", "version": "1.0.0",
   "category": "development", "tags": ["azure-devops","ado","cli","work-items","pull-requests",
-  "backlog","sandbox"], "keywords": ["azure-devops-cli","ado-work-items","ado-pull-requests",
-  "ado-backlog","sandbox-auth","work-on","draft-work-item","babysit-pr"]}`
+  "backlog","sandbox"], "keywords": ["azure-devops","ado-cli","work-items","pull-requests",
+  "backlog","sandbox-auth","work-on","draft-work-item","babysit-pr"]}`
+
+  Keywords are marketplace search terms, not component names — the D4/R1 naming rule does not apply
+  to them.
 - **Root `README.md`** — add an "azure-devops (v1.0.0)" section under **Available Plugins**, same
   short-paragraph style as `sandbox`/`sandbox-auth`. Update the **Extensibility** mention of
   `azure-devops` from hypothetical future plugin to this real one.
@@ -469,12 +555,12 @@ credential-free**, so all can run in ordinary CI or by hand. Detail:
 
 | Gate | Check |
 |---|---|
-| **V1 — Plugin validates** | `claude plugin validate ./azure-devops` passes. Manifest parses; every frontmatter block well-formed with `name` matching the containing directory (skills) or filename basename (agents, incl. `ado-assistant`). No `model` field expected (R12). |
+| **V1 — Plugin validates** | `claude plugin validate ./azure-devops` passes. Manifest parses; every frontmatter block well-formed with `name` matching the containing directory (skills) or filename basename (agents). No component name contains `azure-devops` or `ado` (D4/R1). No `model` field expected (R12). |
 | **V2 — Bundled CLI intact** | Against the exact shipped `ado-cli.js`: bare usage, `list --json`, `docs --out <tmp>`, and `help <method>` for a sample all exit `0` with no env vars and no network. `provenance.json` size + hash match. `method-catalog.md` byte-identical to a fresh regeneration, so it cannot silently drift. |
-| **V3 — Method refs + Tier 1 resolve** | Every bare method name in every migrated file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier 1 list in `CLAUDE.md` equals the referenced set. |
-| **V4 — Self-containment** | Zero hits under `azure-devops/` for `ado:`, `development:`, `gh:`, `code-reviewer:`, `debugging:` — confirming R6 removed every external dependency, not just the obvious ones. Colon-free `ado-` grep clean outside its allowed names. |
+| **V3 — Method refs + Tier 1 resolve** | Every bare method name in every ported file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier 1 list in `CLAUDE.md` equals the referenced set. |
+| **V4 — Self-containment + naming** | Zero hits under `azure-devops/` for `ado:`, `development:`, `gh:`, `code-reviewer:`, `debugging:` — confirming R6 removed every external dependency, not just the obvious ones. Zero hits for `azure-devops-` in any component name, path, or `skills:` entry. Colon-free `ado-` grep clean outside the four allowed filenames. |
 | **V5 — Privacy scan** | No PAT surface, no environment disclosure. Two greps. |
-| **V6 — Workflow instruction review** | The human read no automation can replace. Done last, against the finished tree. |
+| **V6 — Port fidelity review** | The human read no automation can replace: every ported file still does what its source did. Done last, against the finished tree. |
 | **V7 — Marketplace/docs** | `marketplace.json` parses; the new entry's `source` resolves to a real directory; README's new section and updated Extensibility reference present. |
 | **V8 — Source repo untouched** | `claude_plugins` has zero uncommitted changes; `ado/scripts/ado-cli.js` and everything else in the source `ado/` plugin remain exactly as before. |
 
@@ -487,12 +573,12 @@ credential-free**, so all can run in ordinary CI or by hand. Detail:
 **A verified snapshot, not the authority.** Produced by grepping the source plugin's markdown for
 camelCase method names, 2026-08-11. It can under-count names appearing only in prose or a table cell
 the pattern missed — `addPullRequestComment`, `getWorkItemTypeFields`, `assignWorkItem`,
-`addChildWorkItem`, `getQueryResults` are all real catalog methods a migrated skill may legitimately
-reference. **Implementation must recompute the set from the actually-migrated files** rather than
+`addChildWorkItem`, `getQueryResults` are all real catalog methods a ported skill may legitimately
+reference. **Implementation must recompute the set from the actually-ported files** rather than
 transcribing this, and let V3 reconcile. This list exists to fix two concrete errors and to pin the
 *definition* of Tier 1 — not to freeze its membership.
 
-- **Referenced by migrated skills/agents today (21):** `addWorkItemComment`, `createLink`,
+- **Referenced by ported skills/agents today (21):** `addWorkItemComment`, `createLink`,
   `createPullRequest`, `createWorkItem`, `getAllPullRequestChanges`, `getCurrentSprint`,
   `getPullRequest`, `getPullRequestComments`, `getPullRequestFileChanges`, `getSprints`,
   `getSprintWorkItems`, `getTeamMembers`, `getTeams`, `getWorkItemById`, `getWorkItemTypes`,
@@ -506,7 +592,7 @@ transcribing this, and let V3 reconcile. This list exists to fix two concrete er
   exists for pull requests.
 - **Correction 2 — `searchWorkItems` does not exist.** See R8.
 - **Removed from Tier 1:** `getDefinitions`, `listWikis`, `getWikiPageContent`, `getCommitHistory`,
-  `browseRepository`, `getFileContent`. No migrated file or `ado-api.mjs` path uses them. Leaving them
+  `browseRepository`, `getFileContent`. No ported file or `ado-api.mjs` path uses them. Leaving them
   in Tier 1 made the same method simultaneously "always allowed" and "gated because no skill
   references it." They fall under Tier 3's out-of-scope catch-all.
 
@@ -547,14 +633,21 @@ hits in any instruction or script that would supply a credential, and in particu
 contain no `getAuthHeader`. Second: no file may instruct an `env` / `printenv` / `echo "$HTTP_PROXY"` /
 `echo "$HTTPS_PROXY"` style environment dump.
 
-**V4 — allowed bare `ado-` names.** The agent `ado-assistant` (D4/R1's recorded exception), and the
-filenames `ado-cli.js`, `ado-api.mjs`, `ado-mention-conventions.md`, `ado-state-transitions.md`.
-Everything else is a finding. In particular every agent's `skills:` list must name
-`azure-devops-mentions`, not `ado-mentions`.
+**V4 — naming checks, two greps.**
 
-**V6 — workflow instruction review.** A human read of every migrated skill, agent, and command,
-checking four things no automated check can. Deliberately last, so it runs against the finished tree.
-It carries the most weight in a plugin whose behavior *is* its instructions.
+- **Prefixed component names.** Zero hits for `azure-devops-` and zero for `ado-` in any directory
+  name under `skills/`, any filename under `agents/` or `commands/`, any frontmatter `name:`, and any
+  frontmatter `skills:` entry. Every agent's `skills:` list must name **`mentions`**, not
+  `ado-mentions` and not `azure-devops-mentions`. This is the check R12 flags as uncatchable by the
+  namespace grep — `ado-mentions` carries no colon.
+- **Allowed bare `ado-` strings, whole tree.** Exactly four filenames: `ado-cli.js`, `ado-api.mjs`,
+  `ado-mention-conventions.md`, `ado-state-transitions.md` — plus the `ado-*` marketplace keywords and
+  prose that names the *source* plugin's components. Anything else is a finding. There is **no allowed
+  bare `ado-` component name**; the earlier `ado-assistant` exception is withdrawn (D4).
+
+**V6 — port fidelity review.** A human read of every ported skill, agent, and command, checking five
+things no automated check can. Deliberately last, so it runs against the finished tree. It carries the
+most weight in a plugin whose behavior *is* its instructions.
 
 - (a) Every former MCP tool call became a correct [canonical invocation](#canonical-invocation-form) —
   `--structured` present, JSON on stdin, no `--input`, quoted heredoc, quoted `${CLAUDE_PLUGIN_ROOT}`.
@@ -563,6 +656,9 @@ It carries the most weight in a plugin whose behavior *is* its instructions.
 - (c) R6's inline-not-delegate rewrites preserve every phase, gate, and outcome contract of the
   originals.
 - (d) Error handling branches on exit code and stdout, never on stderr being non-empty.
+- (e) **Port fidelity.** Diff each file against its source counterpart. Every difference must map to a
+  named rule (R1-R12). An unexplained difference is an unauthorized redesign and is a finding — no
+  matter how much it improves the file.
 
 ## Appendix D — Verified facts
 
