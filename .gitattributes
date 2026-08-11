@@ -18,3 +18,8 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 *.ps1 text eol=crlf
+
+# Vendored, byte-identical third-party bundle — never normalize line endings.
+# provenance.json pins a SHA-256 of this exact file; EOL conversion would
+# silently invalidate it on checkout (core.autocrlf) without changing behavior.
+azure-devops/scripts/ado-cli.js binary

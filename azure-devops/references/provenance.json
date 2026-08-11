@@ -1,0 +1,8 @@
+{
+  "file": "scripts/ado-cli.js",
+  "origin": "claude_plugins/ado/scripts/ado-cli.js (v3.1.5, esbuild bundle)",
+  "sizeBytes": 3551897,
+  "sha256": "732952A58FE518DBA562AC9B1FCF0D72F7272337FA4D79C6108768620F89182A",
+  "copiedOn": "2026-08-11",
+  "note": "Vendored unmodified. Do not hand-edit. Regenerate provenance.json (this file) whenever the bundle is re-vendored from a newer source build."
+}

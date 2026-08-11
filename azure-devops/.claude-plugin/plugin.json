@@ -1,0 +1,5 @@
+{
+  "name": "azure-devops",
+  "description": "CLI-native Azure DevOps workflows: work items, PRs, review response, and backlog triage via a bundled ado-cli.js — no MCP server, no PAT (sandbox-auth only).",
+  "version": "1.0.0"
+}
