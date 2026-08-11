@@ -542,8 +542,15 @@ Carried into v1.0.0 deliberately. Documented rather than hidden.
   `${CLAUDE_PLUGIN_ROOT}`-is-a-placeholder caveat (now load-bearing, since every skill writes that path
   by hand), and "No PAT, no MCP server, no adapter — sandbox-auth only" up top.
 - **`azure-devops/CLAUDE.md`** — per R3.
-- **No root-level changes required.** `.gitattributes`, `.gitignore`, root `CLAUDE.md` already cover
-  `.mjs` / `.md` / `.json`.
+- **One narrow root-level change is required, and only this one.** `.gitattributes`, `.gitignore`, root
+  `CLAUDE.md` already cover `.mjs` / `.md` / `.json`, but the vendored bundle needs an explicit line this
+  repo's existing rules don't provide: `azure-devops/scripts/ado-cli.js binary` appended to the root
+  `.gitattributes`. Reason: this repo's blanket `* text=auto`, combined with a checkout machine's
+  `core.autocrlf=true`, normalizes the bundle's line endings on checkout — silently invalidating
+  `provenance.json`'s pinned SHA-256 and breaking the byte-identical vendoring guarantee that V2/V8 and
+  Task 17's fresh-clone check depend on. Verified: `git check-attr` + a forced `git checkout --` of the
+  file reproduce the source's exact hash only with this rule in place. No other root-level file changes
+  are in scope.
 
 ## Release verification
 
