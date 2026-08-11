@@ -1,8 +1,10 @@
 # `azure-devops` domain plugin: CLI-native migration of the ADO workflow
 
 **Date:** 2026-08-11
-**Status:** Approved design — ready for implementation
+**Status:** Approved design, self-review applied 2026-08-11 — ready for implementation once
+[Open decisions](#open-decisions) are answered
 **Source repo:** `B:\sources\claude_plugins`, plugin `ado/` (version `3.1.5`) — read-only input, **not modified**
+
 **Destination:** this repo, `B:\sources\sandbox-plugins`, new plugin directory `azure-devops/`
 **Target marketplace release:** `azure-devops` v1.0.0, published in `.claude-plugin/marketplace.json` alongside the existing `sandbox` and `sandbox-auth` entries
 
@@ -26,7 +28,7 @@ None of that fits `sandbox-plugins`:
   `development:draft-work-item` for the actual orchestration engine.
 
 The plugin also bundles `ado/scripts/ado-cli.js` — an 87,719-line esbuild bundle of the same
-TypeScript project's CLI entry point, exposing the same 131 tools as the MCP server through a
+TypeScript project's CLI entry point, exposing the same 130 tools as the MCP server through a
 `node ado-cli.js <method>` command-line contract. This CLI is the mechanism that makes a CLI-native
 port possible: it is functionally 1:1 with the MCP tools the skills already reference (same
 `registerTools()` function, same Zod schemas), but it ships as an untracked, unversioned prototype
@@ -67,16 +69,16 @@ gaps and documents the provenance gap rather than silently ignoring either).
 - Do not fully re-implement the generic `development:work-on` / `development:draft-work-item`
   orchestration engines (design-review gates, TDD execution loop, blind-spot detection, bug RCA
   workflow) inside this plugin. Reproducing that framework is out of scope for an ADO-to-CLI
-  migration; see [Workflow mapping — `azure-devops-work-on` and `azure-devops-draft-work-item`](#workflow-mapping)
+  migration; see [Compatibility rule 6 — inline-not-delegate](#compatibility-and-migration-rules)
   for the inline-not-delegate resolution actually adopted.
 - Do not close the `ado-cli.js` provenance gap (no git history, no publisher, no independent version)
   as part of v1.0.0 — it is documented as a known limitation, not blocked on.
 - Do not migrate MCP-specific artifacts: `launch-ado-mcp.sh`, `examples/azure-devops.env.example`,
   `examples/claude/.mcp.json.example`, `examples/copilot/mcp-config.json.example`, or the
   `setup-ado-mcp` skill/command. These describe a setup path this plugin does not have.
-- Do not create the plugin's git commit history retroactively or squash/rewrite `claude_plugins`
-  history — this spec only adds this one document.
-- Do not push anything; this spec's only repository action is committing itself.
+- Do not modify `claude_plugins` in any way. The source `ado` plugin — including the untracked
+  `ado/scripts/ado-cli.js` — is read-only input to this migration; nothing is committed, staged,
+  rewritten, or squashed there. The bundle is **copied out**, never moved or edited in place.
 
 ## Architecture
 
@@ -87,9 +89,12 @@ gaps and documents the provenance gap rather than silently ignoring either).
         │  Skill tool invocation → generic method call
         ▼
    invoke-ado-cli.mjs  (shared adapter, one per plugin — not one per tool)
-        │  1. resolve proxy/CA env (sandbox-auth already set HTTP(S)_PROXY, REQUESTS_CA_BUNDLE, …)
-        │  2. spawn: node <plugin>/scripts/ado-cli.js <method> --structured --input <tmp.json>
-        │  3. parse stdout JSON / map exit code → named error
+        │  1. resolve proxy/CA env (sandbox pre-set HTTP(S)_PROXY, REQUESTS_CA_BUNDLE, …;
+        │     pass proxy vars through uppercase, map CA path → NODE_EXTRA_CA_CERTS)
+        │  2. spawn: node <plugin>/scripts/ado-cli.js <method> --structured
+        │     with JSON.stringify(params) written to the child's stdin (no --input flag)
+        │  3. parse stdout JSON / map exit code → named error (stderr is noisy even on success)
+
         ▼
    ado-cli.js  (bundled, self-contained; same registerTools() as the MCP server)
         │  HTTPS to dev.azure.com / *.visualstudio.com, through the sandbox's MITM egress proxy
@@ -130,33 +135,43 @@ plugin's `ado:setup-ado-mcp` auto-setup rule (`CLAUDE.md` "MCP Prerequisite — 
 `invocationConfig()` are `--pat <token>` (Basic-shape header) and no-flag `auth:"none"` (zero
 `Authorization` header — "a proxy injects it"). `invoke-ado-cli.mjs` always uses the no-flag mode:
 it never passes `--pat`, and it does not read `AZURE_DEVOPS_PAT` / `AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`
-/ `AZURE_DEVOPS_BEARER_TOKEN` from the environment or forward them. The org base URL is still required
-(`AZURE_DEVOPS_ORG_URL` or equivalent, per `ado-cli.js`'s own missing-env-var check, exit code 4) —
-that is configuration, not a credential, and is set the same way `sandbox-auth:azure-devops` already
-expects an org/target to be known.
+/ `AZURE_DEVOPS_BEARER_TOKEN` from the environment or forward them. Both `AZURE_DEVOPS_ORG_URL` **and**
+`AZURE_DEVOPS_PROJECT` are still required (`ado-cli.js` exits `4` with
+`"AZURE_DEVOPS_ORG_URL and AZURE_DEVOPS_PROJECT must be set"` if either is missing) — those are
+configuration, not credentials, and are set the same way `sandbox-auth:azure-devops` already expects an
+org/target to be known.
 
-**Node-specific proxy/CA wiring (new, required — not covered by any existing skill).** `sandbox-auth`'s
-existing helpers are Python (`requests` honors `HTTP_PROXY`/`HTTPS_PROXY` and `REQUESTS_CA_BUNDLE` /
-`SSL_CERT_FILE` / `CURL_CA_BUNDLE` automatically). `ado-cli.js` runs under Node, and Node's `fetch`
-(undici) does **not** read `HTTP_PROXY`/`HTTPS_PROXY` by default, and does not honor
-`REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` at all — those are Python/curl-specific. `invoke-ado-cli.mjs`
-must therefore explicitly set, in the child process environment it spawns `ado-cli.js` into:
+**Node-specific proxy/CA wiring (verified against the bundle, 2026-08-11).** `sandbox-auth`'s existing
+helpers are Python (`requests` honors `HTTP_PROXY`/`HTTPS_PROXY` and `REQUESTS_CA_BUNDLE` /
+`SSL_CERT_FILE` / `CURL_CA_BUNDLE` automatically). `ado-cli.js` runs under Node, so the mechanism had
+to be established for its actual HTTP stack rather than assumed. **Static verification of the bundle
+found zero uses of global `fetch`/undici** (`grep -cE '(^|[^.\w])fetch\('` → `0`): every Azure DevOps
+call goes `AzureDevOpsService` → `azure-devops-node-api`'s `WebApi` → `typed-rest-client`'s
+`HttpClient` → Node's `https.request` with a `tunnel`-package proxy agent. This determines the wiring:
 
-- `NODE_EXTRA_CA_CERTS` = the same MITM CA path the sandbox already exposes via
-  `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` (read whichever of those two is set; do not hardcode a path).
-- `NODE_USE_ENV_PROXY=1` — enables undici's built-in `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` support
-  (available on the Node 24 line; the audit's test environment was Node v24.16.0). Do not depend on
-  a third-party proxy-agent package — this plugin stays dependency-free.
-- Pass `HTTP_PROXY`/`HTTPS_PROXY` through from the parent environment unchanged (already set by
-  `sandbox-auth`'s egress-auth flow; do not rewrite or strip the embedded per-sandbox token).
+- **Proxy: already handled natively; do not add anything.** `typed-rest-client`'s `HttpClient`
+  reads `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` from `process.env` itself (`_getProxy()` /
+  `_isMatchInBypassProxyList()`) and builds a `tunnel` agent from them. **`invoke-ado-cli.mjs` must
+  simply pass these through from the parent environment unchanged** (already set by the sandbox before
+  any skill runs; do not rewrite or strip the embedded per-sandbox basic-auth token).
+  - **Caveat — uppercase only.** `typed-rest-client` reads *only* the uppercase names (they are a hard-
+    coded `EnvironmentVariables` enum: `"HTTP_PROXY"`, `"HTTPS_PROXY"`, `"NO_PROXY"`); it does **not**
+    fall back to lowercase `http_proxy`/`https_proxy`/`no_proxy`. The adapter must therefore normalize:
+    if only the lowercase form is set in the parent environment, set the uppercase equivalent in the
+    child environment.
+  - **`NODE_USE_ENV_PROXY` is not applicable and must not be relied on.** It is an undici/`fetch`-level
+    switch; this bundle never uses undici, so setting it would have no effect on any real call path.
+    Setting it is harmless but misleading — omit it.
+- **CA trust: must be set explicitly.** `NODE_EXTRA_CA_CERTS` = the same MITM CA path the sandbox
+  already exposes via `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` (read whichever of those two is set; do not
+  hardcode a path). This is required because Node does not honor the Python/curl CA variables at all.
+  `NODE_EXTRA_CA_CERTS` extends Node's default root store process-wide, so it covers `https.request`
+  and the `tunnel` agent's TLS sockets alike — it must be set in the child environment **before**
+  spawn, since Node reads it only at process start.
 
-This is a genuine new requirement this migration must validate empirically during implementation (see
-[Validation and release gates](#validation-and-release-gates), gate V1): if `ado-cli.js`'s HTTPS client
-does not, in practice, honor `NODE_EXTRA_CA_CERTS`/`NODE_USE_ENV_PROXY` for every code path it uses
-(some HTTP clients bypass undici's global dispatcher), `invoke-ado-cli.mjs` must fall back to an
-explicit proxy agent configuration and the exact mechanism must be recorded in the adapter's own
-header comment — but the two-env-var approach is the first thing to try, and is what the design
-assumes.
+Gate V1 below still validates this end-to-end against a real sandbox and org, but it is now a
+confirmation of a statically verified mechanism (CA trust in particular), not an open design question
+with an unknown fallback.
 
 ### Component and file responsibilities
 
@@ -169,6 +184,8 @@ azure-devops/
 │   ├── ado-mention-conventions.md      copied verbatim from ado/references/
 │   ├── review-reception-protocol.md    copied verbatim from ado/references/
 │   ├── review-thread-state-machine.md  copied with one accuracy fix (see Compatibility rule 7)
+│   ├── ado-state-transitions.md        copied from claude_plugins/development/skills/work-on/
+│   │                                   reference/ (NOT from ado/ — see Compatibility rule 6)
 │   ├── method-catalog.md               new, generated — see Method catalog approach
 │   └── error-codes.md                  new — the named error taxonomy (see Error handling)
 ├── scripts/
@@ -202,15 +219,28 @@ azure-devops/
     └── workflow/                       scripted end-to-end skill-flow tests against a mocked ado-cli.js
 ```
 
+**Test runner.** This repo currently has no `tests/` directory, no `package.json`, and no test-runner
+config of any kind — the migration introduces the first ones. To stay consistent with the repo's
+dependency-free posture (`sandbox-auth` ships plain Python scripts with no `requirements.txt`), tests
+use **Node's built-in `node:test` runner and `node:assert`**, executed as
+`node --test azure-devops/tests/` from the repo root. No `package.json`, no npm install, no third-party
+test framework. Test files are named `*.test.mjs`. This is the mechanism gate V7 ("all test suites
+green") refers to.
+
 `invoke-ado-cli.mjs` responsibilities (the one new piece of runtime code every skill/script goes
 through):
 
 1. **`invoke(method, params, opts)`** — the single generic entry point. No per-tool wrapper functions;
    `params` is passed straight through as the JSON body `ado-cli.js` expects (never as CLI flags).
 2. Resolve the path to the bundled `${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js` and spawn
-   `node ado-cli.js <method> --structured --input -` (stdin), writing `JSON.stringify(params)` to stdin
-   — never via `--input <file>` from untrusted content and never by string-interpolating `params` into
-   a shell command.
+   `node ado-cli.js <method> --structured`, writing `JSON.stringify(params)` to the child's **stdin**
+   and closing it — never by string-interpolating `params` into a shell command, and never via
+   `--input <file>` written from untrusted content. **Do not pass `--input -`:** the CLI's hand-rolled
+   arg parser has no `-`-means-stdin sentinel and will literally `fs.readFileSync("-")`, failing with
+   `ENOENT ... open '<cwd>/-'` (verified 2026-08-11). Stdin is already the default source for the JSON
+   body when `--input` is absent; the CLI's own usage text documents the contract as
+   `echo '<json>' | azuredevops-cli <method> [--structured]`.
+
 3. Set the child environment per [Authentication](#authentication-sandbox-auth-only-proxy-injected-zero-pat-surface)
    above; never set `--pat`.
 4. Apply the [mutation policy](#mutation-policy) before spawning: BLOCKED methods/params raise
@@ -218,10 +248,16 @@ through):
    obtained explicit confirmation (the adapter takes a `confirmed: true` flag it will not proceed
    without — it does not itself prompt, since HITL prompting is the skill/agent's job, not the
    adapter's).
-5. Parse stdout as JSON on exit code 0; on nonzero exit, map the exit code and any parsed error JSON
-   to the [named error taxonomy](#error-handling) and return `{ok: false, code, error}` — never throw
-   a raw `Error` with CLI stderr text as the only signal.
+5. Parse **stdout only** as JSON on exit code 0; on nonzero exit, map the exit code and any parsed
+   error JSON to the [named error taxonomy](#error-handling) and return `{ok: false, code, error}` —
+   never throw a raw `Error` with CLI stderr text as the only signal.
+   - **stderr is always noisy and must never be treated as a failure signal.** Verified 2026-08-11:
+     every invocation writes an `[Auth] Auth type: none, PAT: not set` banner to stderr, and Node emits
+     a `DEP0169` `url.parse()` deprecation warning from a bundled third-party dependency. Both appear
+     on successful, exit-0 runs. stdout stays clean JSON under `--structured`. The adapter branches on
+     exit code and stdout parseability only, and captures stderr solely as `error.detail` on failure.
 6. Return a single stable shape: `{ok: true, data} | {ok: false, code, error: {message, detail?}}`.
+
 
 ### Method catalog approach
 
@@ -233,9 +269,20 @@ into the reference file at build/release time. Skills reference method names by 
 `getWorkItemById`, `addWorkItemComment`) exactly as the source plugin's skills already do; the catalog
 file is the cross-check surface, not a new abstraction layer skills call through.
 
+Both introspection subcommands run with **zero credentials and zero network access** — verified
+2026-08-11: `list --json` and `docs --out` both exit `0` with `AZURE_DEVOPS_ORG_URL` and
+`AZURE_DEVOPS_PROJECT` unset. Gates V2 and V3 are therefore runnable in ordinary CI with no secrets.
+
+**Counting caveat for the generator.** The real catalog is **130 methods** across 10 categories
+(Work Items 18, Boards & Sprints 10, Projects 10, Git 25, Testing 14, DevSecOps 13, Artifacts 12,
+AI-Assisted 12, Wiki 5, Build 11) — verified from `list --json`. Note that `docs --out <dir>` emits
+**131 files**, because it also writes an index `README.md` alongside the 130 `<method>-reference.md`
+files; do not derive the method count from a file count.
+
 **Regeneration is a release gate, not a one-time step** — see gate V2: every release must regenerate
 `method-catalog.md` from the bundled `ado-cli.js` version actually shipped and diff it against the
 version-controlled copy, so the catalog never silently drifts from the bundled CLI.
+
 
 ## Data flow
 
@@ -274,7 +321,18 @@ version-controlled copy, so the catalog never silently drifts from the bundled C
   log write).
 - **Egress proxy env vars pass through unmodified**, never persisted to disk, never echoed in error
   messages returned to the model (an error message may say "auth failed" but must not include the
-  proxy token value).
+  proxy token value). This matters concretely: `HTTP_PROXY`/`HTTPS_PROXY` in a sandbox embed a
+  per-sandbox token as basic-auth userinfo, and `invoke-ado-cli.mjs` forwards them verbatim to the
+  child. Any diagnostic that dumps the child's environment — including a failure `detail` — must
+  redact the userinfo component of those two values.
+- **The CLI's own stderr banner is benign but must not be forwarded blindly.** `ado-cli.js` prints
+  `[Auth] Auth type: none, PAT: not set` to stderr on every invocation (verified 2026-08-11). It
+  discloses no secret — and under this design it is always exactly that string, since `--pat` is never
+  passed — but it is CLI-internal noise that should not surface to the user as part of an error
+  message. It is also a useful invariant to assert in tests: if that banner ever reads anything other
+  than `Auth type: none, PAT: not set`, a PAT has leaked into the invocation and the run must fail
+  closed.
+
 - **Append-only comments is a security/integrity property, not just a UX rule** — see
   [Mutation policy](#mutation-policy): it is enforced as a hard adapter-level block, not left to prompt
   discipline.
@@ -288,19 +346,54 @@ for actions that are exceptional: destructive, irreversible, or outside what any
 actually uses. This is enforced as a three-tier classification inside `invoke-ado-cli.mjs`, not as
 prose:
 
-**Tier 1 — Ordinary (always allowed, no new gate).** Every method any migrated skill currently calls
-via its MCP-tool name, with its current usage pattern preserved exactly: `getWorkItemById`,
-`createWorkItem`, `updateWorkItem`, `updateWorkItemState`, `addWorkItemComment`, `createLink`,
-`listWorkItems`, `searchWorkItems` (pending the stale-reference fix in
-[Compatibility rule 8](#compatibility-and-migration-rules)), `listPullRequests`, `createPullRequest`,
-`getPullRequestById`, `addPullRequestComment`, `getBuilds`, `getBuildLog`, `getDefinitions`,
-`getBuildTimeline`, `listWikis`, `getWikiPageContent`, `getTeams`, `getTeamMembers`, `getSprints`,
-`getCurrentSprint`, `getSprintWorkItems`, `getWorkItemTypes`, `getWorkItemTypeFields`,
-`getCommitHistory`, `browseRepository`, `getFileContent`, and the other read/ordinary-write methods the
-skill files reference by name. Existing skills that already ask the user to confirm before creating/
-updating (e.g. `azure-devops-work-items`' "always confirm before making changes", `azure-devops-draft-
-work-item`'s mandatory preview) keep that prompt-level confirmation exactly as-is — it is unaffected by
-this policy layer.
+**Tier 1 — Ordinary (always allowed, no new gate).** Tier 1 is defined as *exactly* the set of methods
+the migrated skills/agents/commands reference by name, plus the methods the migrated `ado-api.mjs`
+needs after Compatibility rule 9 rehomes its transport. It is not a curated wish-list — it is that set,
+enumerated. Verified against the live source plugin and `list --json` on 2026-08-11:
+
+- *Referenced by migrated skills/agents today:* `addWorkItemComment`, `createLink`, `createPullRequest`,
+  `createWorkItem`, `getAllPullRequestChanges`, `getCurrentSprint`, `getPullRequest`,
+  `getPullRequestComments`, `getPullRequestFileChanges`, `getSprints`, `getSprintWorkItems`,
+  `getTeamMembers`, `getTeams`, `getWorkItemById`, `getWorkItemTypes`, `listPullRequests`,
+  `listWorkItems`, `replyToComment`, `updatePullRequestThread`, `updateWorkItem`, `updateWorkItemState`.
+- *Required by the migrated `ado-api.mjs` backlog scanner* (which today reaches these through its own
+  direct REST calls and must reach them through `invoke()` instead): `getWorkItemComments`,
+  `getWorkItemsBatch`, `getBuilds`, `getPullRequestBuilds`, `getBuildTimeline`, `getBuildLog`.
+
+Two corrections this list encodes, both found by cross-checking the live catalog:
+
+- **`getPullRequestById` does not exist.** An earlier draft of this spec listed it in Tier 1. The real
+  method is **`getPullRequest`**, which is also what the source skills/agents actually reference. There
+  is no `...ById` variant for pull requests.
+- **`searchWorkItems` does not exist** — see [Compatibility rule 8](#compatibility-and-migration-rules).
+
+Methods that an earlier draft listed in Tier 1 but which **no** migrated skill, agent, command, or
+`ado-api.mjs` path actually uses — `getDefinitions`, `listWikis`, `getWikiPageContent`,
+`getCommitHistory`, `browseRepository`, `getFileContent` — are **removed from Tier 1** and fall under
+Tier 3's out-of-scope catch-all. Leaving them in Tier 1 created a direct contradiction: the same method
+was simultaneously "always allowed" and "gated because no skill references it."
+
+Existing skills that already ask the user to confirm before creating/updating (e.g.
+`azure-devops-work-items`' "always confirm before making changes", `azure-devops-draft-work-item`'s
+mandatory preview) keep that prompt-level confirmation exactly as-is — it is unaffected by this policy
+layer.
+
+**Tier 1 is derived, not hand-maintained.** Because Tier 1 is by definition "the referenced set," the
+static test in gate V3 is what keeps it honest: the same cross-check that validates method names
+against the catalog also asserts that the Tier 1 table in `invoke-ado-cli.mjs` equals the set of names
+actually referenced across the plugin. Adding a method to a skill without adding it to Tier 1 (or vice
+versa) fails that test rather than silently drifting.
+
+**The enumeration above is a verified snapshot, not the authority.** It was produced by grepping the
+source plugin's markdown for camelCase method names on 2026-08-11, so it can under-count names that
+appear only in prose or in a table cell the pattern missed (`addPullRequestComment`,
+`getWorkItemTypeFields`, `assignWorkItem`, `addChildWorkItem`, and `getQueryResults` are all real
+catalog methods that a migrated skill may legitimately end up referencing). Implementation must
+recompute the set from the actually-migrated files rather than transcribing this list, and let gate V3
+reconcile the two. The list is here to fix the two concrete errors it corrects and to pin the
+*definition* of Tier 1 — not to freeze its membership.
+
+
 
 **Tier 2 — Hard-BLOCKED (technical gate, not a prompt).** `manageWorkItemComment` with
 `action: "update"` or `action: "delete"` is rejected by `invoke-ado-cli.mjs` before the CLI is even
@@ -406,9 +499,19 @@ skills have no structured error handling at all beyond "the MCP call failed."
      (bug RCA workflow, plan/RCA comment formats, decision-log guide, git-worktree/branch-completion
      guides) are copied into `azure-devops-work-on/reference/` as generic, provider-neutral guides
      (their content does not mention GitHub/ADO specifics beyond the tables this rule already
-     collapses); the two genuinely ADO-specific reference files
-     (`ado-state-transitions.md`, `ado-mention-conventions.md`) are the ones this plugin already ships
-     natively — reuse those, don't re-derive them.
+     collapses). **Correction:** an earlier draft of this rule claimed `ado-state-transitions.md` and
+     `ado-mention-conventions.md` were "the two genuinely ADO-specific reference files this plugin
+     already ships natively — reuse those, don't re-derive them." That is only half true, verified
+     2026-08-11: the source `ado` plugin's `references/` contains exactly three files
+     (`ado-mention-conventions.md`, `review-reception-protocol.md`, `review-thread-state-machine.md`).
+     **`ado-state-transitions.md` is not among them** — it lives in the `development` plugin, at
+     `claude_plugins/development/skills/work-on/reference/ado-state-transitions.md`, and is consumed by
+     `development:work-on` when its provider is Azure DevOps. Since `azure-devops-work-on` is absorbing
+     that skill's ADO-specific behavior, this file must be **copied in from `development`** like the
+     other reference files above, not "reused" from a source `ado` directory that never had it. The
+     [file tree](#component-and-file-responsibilities) lists it under `references/` accordingly. Only
+     `ado-mention-conventions.md` is genuinely already native to the source plugin.
+
 7. **`review-thread-state-machine.md`'s synchronization note is corrected, not carried forward
    verbatim.** The source file opens with "this lifecycle is copied into the code-reviewer and ADO
    plugins; the copies must remain byte-identical" — `code-reviewer` does not exist in this repo, so
@@ -420,18 +523,46 @@ skills have no structured error handling at all beyond "the MCP call failed."
    own `[Resolve]` step (which calls `updatePullRequestThread` with a terminal status) is preserved
    exactly as the source agent already behaves — that is the actual, tested behavior of the worker
    today, and this migration's job is transformation, not a behavioral audit of a pre-existing
-   inconsistency between it and Rule #1 ("the developer never resolves or closes threads"). This
-   inconsistency is pre-existing in the source plugin, is unrelated to the CLI migration, and is
-   recorded here as a known carried-over documentation inconsistency rather than silently resolved one
-   way or the other.
-8. **Stale method-name references are fixed, not guessed at blindly.** `ado-work-items/SKILL.md` line 27
-   references `searchWorkItems` as a query method; the audit found this name does not match any of the
-   CLI's 131 real methods. Because this spec does not itself enumerate the full method catalog, the
-   concrete fix is a **validation requirement, not a name substituted here**: during implementation,
-   cross-check every method name appearing in every migrated skill/agent/command file (including this
-   one, `ado-draft-work-item`'s Duplicate Check table, and `ado-work-my-backlog`) against
-   `node scripts/ado-cli.js list --json`'s real output, and correct any name that does not match to the
-   closest real equivalent (e.g. a WIQL-based query method) before release. This is gate V3 below.
+   inconsistency. This inconsistency is pre-existing in the source plugin, is unrelated to the CLI
+   migration, and is recorded here as a known carried-over documentation inconsistency rather than
+   silently resolved one way or the other.
+
+   **Scope of the inconsistency (verified 2026-08-11 — it is two-sided, not one).** Earlier drafts
+   described this as worker-vs-Rule-#1 only. In fact the migrated plugin will ship *three* mutually
+   inconsistent statements about who resolves threads:
+   - `references/review-thread-state-machine.md` line 180, Rule 1: *"**Only the reviewer closes
+     threads** — the developer never resolves or closes threads in ADO."*
+   - `agents/ado-babysit-pr-worker.md` (`### [Resolve] — Resolve Addressed Threads`): explicitly calls
+     `updatePullRequestThread` with `status: "fixed"` / `"wontFix"` / `"byDesign"` / `"closed"`.
+   - `agents/ado-pr-tender.md` (its `<do_not_resolve>` block): *"Do NOT resolve comment threads — let
+     the reviewer resolve them."*
+
+   So the two agents contradict **each other**, not merely a shared reference doc — the babysit worker
+   resolves, the PR tender is forbidden to. Carrying both forward verbatim ships that contradiction
+   into a v1.0.0 release. This spec still does not resolve it (doing so is a behavioral decision about
+   the ADO review workflow, out of scope for a CLI transport migration), but it must be **surfaced to
+   the user for an explicit decision before or during implementation**, not just filed as a footnote.
+   Whichever way it is decided, the migrated copies of all three files must end up consistent, and the
+   decision recorded in `azure-devops/CLAUDE.md`. See [Open decisions](#open-decisions).
+
+8. **Stale method-name references are fixed, with the replacement now identified.**
+   `ado-work-items/SKILL.md` line 27 (`` 2. Run `listWorkItems` or `searchWorkItems`. ``) and
+   `ado-draft-work-item/SKILL.md`'s Duplicate Check table both reference `searchWorkItems`, which does
+   not exist among the CLI's 130 real methods (verified against `list --json`, 2026-08-11).
+
+   **The replacement is `listWorkItems`** — the CLI's own catalog describes it as the *"Preferred
+   structured work item query path. Usually 1 WIQL call plus 1 batched hydrate call for up to 200
+   returned items"*, i.e. exactly the WIQL-based query capability the stale name was reaching for. Note
+   that `ado-work-items/SKILL.md` line 27 already names `listWorkItems` alongside it, so the fix is to
+   drop the `or searchWorkItems` clause rather than substitute a different method. Two adjacent methods
+   are worth considering per call site instead of a blind substitution: `getMyWorkItems` (assigned-to-me
+   slice) and `getQueryResults` (saved team queries) — pick per the surrounding intent.
+
+   The general cross-check remains a release gate (V3): during implementation, verify **every** method
+   name appearing in **every** migrated skill/agent/command file against a freshly generated
+   `node scripts/ado-cli.js list --json`, and correct any other mismatch found. `searchWorkItems` and
+   `getPullRequestById` (see [Mutation policy](#mutation-policy)) are the two already known.
+
 9. **`ado-work-my-backlog/scripts/ado-api.mjs`'s direct PAT auth is removed, not migrated as-is.**
    The source script's `getAuthHeader()` reads `AZURE_DEVOPS_PAT` / `AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`
    / `AZURE_DEVOPS_BEARER_TOKEN` directly and builds its own `Authorization` header for its own
@@ -449,6 +580,26 @@ skills have no structured error handling at all beyond "the MCP call failed."
     `azure-devops/.claude-plugin/plugin.json` starts at `"version": "1.0.0"`, matching the "marketplace
     v1.0.0 release" decision and the same pattern this repo already used for `sandbox` (which started
     at `1.0.0` rather than continuing `claude_plugins`' numbering).
+12. **Agent frontmatter is carried forward as-is, but its cross-references are renamed.** Verified
+    2026-08-11: all three source agents share this frontmatter shape —
+    `name`, `description`, `user-invocable: true`, `disable-model-invocation: false`,
+    `modelintelligence` (`5` for the babysit worker, `1` for the other two), `effort`
+    (`high` / `xhigh`), and `skills: [ado-mentions]`. Two consequences the migration must handle:
+    - **`skills: - ado-mentions` must become `skills: - azure-devops-mentions`** in all three agents.
+      Rule 1 renames the skill directory; if the agents' frontmatter reference is not renamed with it,
+      all three agents silently lose their mention-conventions skill at load time. This is the one
+      cross-reference the `ado:`/`development:` namespace grep in gate V4 will **not** catch, because
+      `ado-mentions` carries no namespace colon.
+    - **The static frontmatter test must not require a `model` field.** These agents use
+      `modelintelligence` + `effort`, not `model:`. An earlier draft of the [Test strategy](#test-strategy)
+      required "matching name/model fields for agents," which every migrated agent would fail. The test
+      asserts `name` and `description` are present and that `name` matches the filename basename;
+      `modelintelligence`/`effort`/`user-invocable`/`disable-model-invocation` are carried through
+      unchanged and unvalidated. Note this differs from the frontmatter example in this repo's root
+      `CLAUDE.md` (which documents `model:`/`tools:`/`permissionMode:`); the source agents' shape is
+      preserved rather than rewritten, since rewriting model-selection semantics is not part of a
+      transport migration.
+
 
 ## Known limitations carried into v1.0.0
 
@@ -477,16 +628,25 @@ unresolved gaps documented rather than hidden:
 
 **Static tests** (`tests/static/`):
 - Every `.claude-plugin/plugin.json`, and every skill/agent/command frontmatter block, parses and has
-  the required fields (`name`, `description` at minimum for skills; matching name/model fields for
-  agents).
+  the required fields (`name` + `description` for both skills and agents, with `name` matching the
+  containing directory name for skills and the filename basename for agents). Agents are **not**
+  asserted to have a `model` field — see [Compatibility rule 12](#compatibility-and-migration-rules).
 - Grep-based cross-reference check: no file under `azure-devops/` references `ado:`, `development:`,
   `gh:`, `code-reviewer:`, `debugging:` namespaces (mirrors the same check the prior `sandbox-plugins`
   seed spec used for its own self-containment gate) — confirms the inline-not-delegate migration
   (rule 6) actually removed every external-plugin dependency, not just the obvious ones.
+- Colon-free cross-reference check (rule 12): no file under `azure-devops/` references a bare
+  `ado-`-prefixed skill/agent/command name — in particular every agent's `skills:` list names
+  `azure-devops-mentions`, not `ado-mentions`. The allowed exceptions are the bundled script filenames
+  that legitimately keep their names (`ado-cli.js`, `invoke-ado-cli.mjs`, `ado-api.mjs`) and the
+  reference filenames `ado-mention-conventions.md` / `ado-state-transitions.md`.
 - Method-name cross-check (gate V3): every bare method name referenced in any skill/agent/command
-  markdown file matches an entry in a freshly generated `node scripts/ado-cli.js list --json`.
+  markdown file matches an entry in a freshly generated `node scripts/ado-cli.js list --json`, **and**
+  the Tier 1 table in `invoke-ado-cli.mjs` equals that referenced set (see
+  [Mutation policy](#mutation-policy)).
 - `references/method-catalog.md` is byte-identical to what regenerating it from the bundled
   `ado-cli.js` produces right now (catches drift between the shipped CLI and the checked-in catalog).
+
 
 **Unit tests** (`tests/unit/`):
 - `invoke-ado-cli.mjs`'s mutation-policy classifier: Tier 1 methods pass through un-gated; the Tier 2
@@ -543,20 +703,31 @@ unresolved gaps documented rather than hidden:
 
 Before the `azure-devops` plugin's initial implementation is considered release-ready:
 
-- **V1 — Proxy/CA wiring validated for real.** The `NODE_EXTRA_CA_CERTS`/`NODE_USE_ENV_PROXY` approach
-  in [Authentication](#authentication-sandbox-auth-only-proxy-injected-zero-pat-surface) is exercised
-  against a real sandbox session and a real (or realistic test) ADO org, confirming `ado-cli.js`'s
-  actual HTTP client (not just Node's `fetch` in isolation) honors both. If it does not, the fallback
-  approach is implemented and this section of the spec is updated before release, not silently patched
-  around at runtime.
+- **V1 — Proxy/CA wiring validated for real.** The mechanism in
+  [Authentication](#authentication-sandbox-auth-only-proxy-injected-zero-pat-surface) — pass
+  `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` through in uppercase, set `NODE_EXTRA_CA_CERTS`, set no
+  `NODE_USE_ENV_PROXY` — is exercised against a real sandbox session and a real (or realistic test) ADO
+  org. Static analysis has already established the transport (`typed-rest-client` + `tunnel` over
+  `https.request`, zero undici usage), so what V1 is actually confirming is **CA trust**: that the
+  MITM certificate presented by the egress proxy validates under `NODE_EXTRA_CA_CERTS` for
+  `ado-cli.js`'s TLS sockets. If it does not, the fallback is a `requestOptions.ca` / explicit-agent
+  configuration passed through the service layer, and this section of the spec is updated before
+  release rather than silently patched around at runtime.
 - **V2 — Method catalog matches the shipped bundle.** `references/method-catalog.md` is regenerated
   from `node scripts/ado-cli.js list --json`/`docs` against the exact bundled `ado-cli.js` being
-  released and is byte-identical to the checked-in copy (test in `tests/static/`).
-- **V3 — No stale method-name references.** Every method name in every skill/agent/command file
-  resolves against the regenerated catalog; `ado-work-items/SKILL.md`'s `searchWorkItems` reference
-  (and any other mismatch found by the same check) is corrected before release.
+  released and is byte-identical to the checked-in copy (test in `tests/static/`). Both subcommands run
+  credential-free and offline, so this gate needs no secrets in CI.
+- **V3 — No stale method-name references, and Tier 1 matches reality.** Every method name in every
+  skill/agent/command file resolves against the regenerated catalog; `searchWorkItems` (→ `listWorkItems`,
+  Compatibility rule 8) and `getPullRequestById` (→ `getPullRequest`, Mutation policy) are corrected,
+  along with any other mismatch the same check finds. The check additionally asserts the Tier 1 table
+  in `invoke-ado-cli.mjs` equals the set of method names actually referenced across the plugin.
 - **V4 — Self-containment holds.** The `ado:`/`development:`/`gh:`/`code-reviewer:`/`debugging:`
-  namespace grep (Compatibility rule 6, static test) returns zero hits anywhere under `azure-devops/`.
+  namespace grep (Compatibility rule 6, static test) returns zero hits anywhere under `azure-devops/`,
+  **and** the colon-free `ado-`-prefixed-component grep (Compatibility rule 12) returns no hits outside
+  its allowed filename exceptions — in particular each agent's `skills:` list names
+  `azure-devops-mentions`.
+
 - **V5 — No PAT surface exists.** Grep the entire plugin tree for `AZURE_DEVOPS_PAT`,
   `AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`, `AZURE_DEVOPS_BEARER_TOKEN`, and `--pat`; the only hits allowed
   are the negative documentation of this rule itself (this spec, the plugin's own README/CLAUDE.md
@@ -573,11 +744,39 @@ Before the `azure-devops` plugin's initial implementation is considered release-
 - **V9 — Source repo untouched.** `claude_plugins` has zero uncommitted changes as a result of this
   work; `ado/scripts/ado-cli.js` and everything else in the source `ado/` plugin remain exactly as they
   were before this spec was written.
+- **V10 — Open decisions closed.** Every item in [Open decisions](#open-decisions) has an explicit,
+  user-confirmed resolution recorded in `azure-devops/CLAUDE.md` before v1.0.0 ships.
+
+## Open decisions
+
+These are genuine decisions this spec deliberately does **not** make. Each needs an explicit answer
+before implementation completes (gate V10) — none is a defect to be silently patched.
+
+1. **Who resolves PR review threads?** Verified 2026-08-11, the source plugin ships three mutually
+   inconsistent statements (see [Compatibility rule 7](#compatibility-and-migration-rules)):
+   `review-thread-state-machine.md` Rule 1 forbids the developer from ever resolving threads;
+   `ado-babysit-pr-worker` resolves them with `updatePullRequestThread`; `ado-pr-tender` is explicitly
+   forbidden to. The migration cannot carry all three forward and still be coherent. The options are
+   (a) worker keeps resolving, and Rule 1 plus the pr-tender prohibition are amended to carve out the
+   autonomous-worker case; (b) worker stops resolving, matching Rule 1 and pr-tender; (c) ship as-is
+   with the contradiction documented. This is a workflow-behavior decision, not a transport question —
+   it needs the user, not the implementer.
+2. **Test runner choice.** This spec adopts Node's built-in `node:test` (`node --test`) because the
+   repo has no test infrastructure at all and `sandbox-auth` sets a dependency-free precedent. If the
+   user would rather introduce a `package.json` and a third-party runner, that changes the
+   [file tree](#component-and-file-responsibilities) and gate V7's mechanics.
+3. **`azure-devops-devops-assistant` naming.** Mechanically applying Compatibility rule 1 to
+   `ado-devops-assistant` yields the stuttering `azure-devops-devops-assistant`. It is consistent, but
+   ugly; `azure-devops-assistant` reads better at the cost of breaking the rule's uniformity. Cosmetic,
+   but it is a public component name in a v1.0.0 release, so it is worth one deliberate decision rather
+   than an accident.
+
 
 ## Non-goals (recap)
 
 See [Non-goals](#non-goals) above for the complete list — restated here for scan-ability: no MCP
 server, no PAT/credential UI, no re-implementation of `development`'s generic design/implement/blind-
 spot engines (inline-not-delegate instead), no closing of the `ado-cli.js` provenance gap, no migration
-of MCP-only artifacts (`launch-ado-mcp.sh`, `examples/`, `setup-ado-mcp`), no source-repo history
-rewrite, no push.
+of MCP-only artifacts (`launch-ado-mcp.sh`, `examples/`, `setup-ado-mcp`), and no modification of
+`claude_plugins` whatsoever.
+
