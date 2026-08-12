@@ -183,9 +183,13 @@ Next loop iteration will pick up feedback and advance items further.
 
 - **Scanner fails to run** (Node.js not available, script error): Check
   `node --version` is 18+. If persistent, report the error.
-- **Scanner auth fails** (a CLI call fails with `E_AUTH`): Run
-  `sandbox-auth:azure-devops` once, then retry the scan. Never ask the user
-  to supply a PAT, token, or credential file.
+- **Scanner auth fails** (`E_AUTH` — our vocabulary for this condition; the CLI
+  never prints that token): recognize it in the CLI's structured error body,
+  which the scanner surfaces as `ado-cli.js <method> exited 1: {"error": "…"}` —
+  an HTTP 401/403, `unauthorized`, `authentication failed`, or a proxy
+  `403 denied` inside that `error` string. Run `sandbox-auth:azure-devops` once
+  to warm the session, retry the scan once, then stop and report if it still
+  fails. Never ask the user to supply a PAT, token, or credential file.
 - **Individual work item errors**: Reported in `errors[]` — log and continue.
   The scanner tracks `errorCount` per item; after 3 consecutive errors it
   auto-skips the item.

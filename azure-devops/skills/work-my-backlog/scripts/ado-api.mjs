@@ -20,7 +20,28 @@ const ADO_CLI_PATH = path.resolve(
   "..", "..", "..", "..", "scripts", "ado-cli.js"
 );
 
-function callAdoCli(method, params) {
+// The CLI reads AZURE_DEVOPS_ORG_URL / AZURE_DEVOPS_PROJECT from its own environment and
+// from nothing else: `invocationConfig` consults only those two variables before
+// `fail(…, 4)`, and `parseArgs` exposes no --org/--project flag, so no stdin parameter
+// can carry them. Without this forwarding the child would ignore resolveConfig()
+// entirely and the advertised git-remote auto-detection would be dead — resolveConfig
+// would succeed and every CLI call would still exit 4.
+//
+// process.env is spread first so the child keeps everything the parent had — notably
+// HTTP_PROXY/HTTPS_PROXY/NO_PROXY and NODE_EXTRA_CA_CERTS/SSL_CERT_FILE, which the
+// sandbox egress proxy requires. Only the two config variables are overridden, and only
+// when the caller actually resolved a value, so an unset argument never blanks an
+// inherited one. Nothing here is a credential: sandbox-auth injects that server-side.
+function buildChildEnv(config) {
+  const env = { ...process.env };
+  if (config?.orgUrl) env.AZURE_DEVOPS_ORG_URL = config.orgUrl;
+  if (config?.project) env.AZURE_DEVOPS_PROJECT = config.project;
+  return env;
+}
+
+// `config` carries the {orgUrl, project} each exported function already receives, so the
+// values reach the child without any public signature changing.
+function callAdoCli(method, params, config) {
   return new Promise((resolve, reject) => {
     // `error` and `close` are not mutually exclusive, and scan.mjs runs these under a
     // bounded-concurrency Promise.allSettled — a promise that settles twice (or never)
@@ -36,9 +57,10 @@ function callAdoCli(method, params) {
     try {
       child = spawn("node", [ADO_CLI_PATH, method, "--structured"], {
         stdio: ["pipe", "pipe", "pipe"],
+        env: buildChildEnv(config),
       });
     } catch (err) {
-      reject(new Error(`failed to spawn ado-cli.js for ${method}: ${err.message}`));
+      settle(reject, new Error(`failed to spawn ado-cli.js for ${method}: ${err.message}`));
       return;
     }
 
@@ -110,22 +132,33 @@ export function resolveConfig(repoRoot) {
   return { orgUrl, project, repository: repository || "" };
 }
 
+// Percent-decoding the project/repository segments matches the CLI's own git-remote
+// parser (`detectGitRemoteInfo`, ado-cli.js:69802). It was cosmetic in the source, whose
+// values never left this process; it is load-bearing now that resolveConfig's values are
+// forwarded into the child's AZURE_DEVOPS_PROJECT. A remote copied from the browser
+// encodes spaces, so "Contoso Project" arrives as "Contoso%20Project"; left undecoded it
+// is re-encoded by the API client to "Contoso%2520Project" and every call 404s.
+// Guarded: decodeURIComponent throws URIError on a stray '%'.
+function decodeSegment(value) {
+  try { return decodeURIComponent(value); } catch { return value; }
+}
+
 function parseGitRemote(url) {
   let m;
   // https://dev.azure.com/{org}/{project}/_git/{repo}
   m = url.match(/https?:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/(.+?)(?:\.git)?$/);
-  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: m[2], repository: m[3] };
+  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: decodeSegment(m[2]), repository: decodeSegment(m[3]) };
 
   // https://{org}.visualstudio.com/{project}/_git/{repo}
   m = url.match(/https?:\/\/([^.]+)\.visualstudio\.com\/([^/]+)\/_git\/(.+?)(?:\.git)?$/);
-  if (m) return { orgUrl: `https://${m[1]}.visualstudio.com`, project: m[2], repository: m[3] };
+  if (m) return { orgUrl: `https://${m[1]}.visualstudio.com`, project: decodeSegment(m[2]), repository: decodeSegment(m[3]) };
 
   // SSH variants
   m = url.match(/git@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/(.+?)$/);
-  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: m[2], repository: m[3] };
+  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: decodeSegment(m[2]), repository: decodeSegment(m[3]) };
 
   m = url.match(/[^@]+@vs-ssh\.visualstudio\.com:v3\/([^/]+)\/([^/]+)\/(.+?)$/);
-  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: m[2], repository: m[3] };
+  if (m) return { orgUrl: `https://dev.azure.com/${m[1]}`, project: decodeSegment(m[2]), repository: decodeSegment(m[3]) };
 
   return null;
 }
@@ -148,9 +181,9 @@ function asIteration(value) {
   return value && typeof value === "object" && typeof value.path === "string" && value.path ? value : null;
 }
 
-async function fetchCurrentIteration(teamParams) {
+async function fetchCurrentIteration(teamParams, config) {
   try {
-    return asIteration(await callAdoCli("getCurrentSprint", teamParams));
+    return asIteration(await callAdoCli("getCurrentSprint", teamParams, config));
   } catch (err) {
     // A non-zero exit here (bad team, config, auth) must not abort the whole
     // resolution chain — the source wrapped every attempt in try/catch too.
@@ -159,9 +192,9 @@ async function fetchCurrentIteration(teamParams) {
   }
 }
 
-async function fetchLatestIteration(teamParams) {
+async function fetchLatestIteration(teamParams, config) {
   try {
-    const all = await callAdoCli("getSprints", teamParams);
+    const all = await callAdoCli("getSprints", teamParams, config);
     const list = Array.isArray(all) ? all : [];
     return list.length > 0 ? asIteration(list[list.length - 1]) : null;
   } catch (err) {
@@ -171,6 +204,8 @@ async function fetchLatestIteration(teamParams) {
 }
 
 export async function getCurrentSprint(orgUrl, project, team) {
+  const config = { orgUrl, project };
+
   // Team resolution: the CLI does NOT resolve a default team itself — it passes
   // `teamId` straight through as the TeamContext's `team` field (undefined when
   // omitted) and the Azure DevOps *server* resolves the project's default team.
@@ -181,20 +216,20 @@ export async function getCurrentSprint(orgUrl, project, team) {
   // Attempt 1: current iteration. Attempt 2 mirrors the source's second fallback —
   // no current sprint (between sprints, or iteration dates that don't bracket today)
   // means take the latest iteration from the full list rather than aborting the run.
-  let sprint = await fetchCurrentIteration(teamParams);
-  if (!sprint) sprint = await fetchLatestIteration(teamParams);
+  let sprint = await fetchCurrentIteration(teamParams, config);
+  if (!sprint) sprint = await fetchLatestIteration(teamParams, config);
 
   if (!sprint) {
     // Last resort: discover a team explicitly and retry both lookups against it
     // (mirrors the source's list-teams-and-use-the-first-one fallback).
     try {
-      const teams = await callAdoCli("getTeams", {});
+      const teams = await callAdoCli("getTeams", {}, config);
       const list = Array.isArray(teams) ? teams : [];
       if (list.length > 0) {
         console.error(`[API] Using discovered team: "${list[0].name}"`);
         const discovered = { teamId: list[0].id };
-        sprint = await fetchCurrentIteration(discovered);
-        if (!sprint) sprint = await fetchLatestIteration(discovered);
+        sprint = await fetchCurrentIteration(discovered, config);
+        if (!sprint) sprint = await fetchLatestIteration(discovered, config);
       }
     } catch { /* ignore */ }
   }
@@ -215,6 +250,7 @@ export async function getCurrentSprint(orgUrl, project, team) {
 // ---------------------------------------------------------------------------
 
 export async function querySprintWorkItems(orgUrl, project, sprintPath) {
+  const config = { orgUrl, project };
   const safePath = sprintPath.replace(/'/g, "''");
   const wiql = `
     SELECT [System.Id]
@@ -235,7 +271,7 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
   // DO NOT remove or rewrite the ORDER BY clause without re-checking this: dropping
   // it silently re-arms a 30-day cutoff that hides older assigned work items with
   // no error.
-  const data = await callAdoCli("listWorkItems", { query: wiql, top: 100 });
+  const data = await callAdoCli("listWorkItems", { query: wiql, top: 100 }, config);
   const ids = (data?.workItems || []).map((wi) => wi.id);
   if (ids.length > 0) return ids;
 
@@ -251,7 +287,7 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
   `;
 
   // Same ORDER BY [System.ChangedDate] bypass as above — see the note on the first call.
-  const fallback = await callAdoCli("listWorkItems", { query: fallbackWiql, top: 100 });
+  const fallback = await callAdoCli("listWorkItems", { query: fallbackWiql, top: 100 }, config);
   return (fallback?.workItems || []).map((wi) => wi.id);
 }
 
@@ -267,7 +303,7 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
 // every field plus the relations, and we select what we need client-side.
 
 export async function fetchWorkItemChangedDate(orgUrl, project, id) {
-  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] });
+  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] }, { orgUrl, project });
   const item = (Array.isArray(batch) ? batch : [])[0];
   return item?.fields?.["System.ChangedDate"] || new Date(0).toISOString();
 }
@@ -278,7 +314,7 @@ export async function fetchWorkItemChangedDate(orgUrl, project, id) {
 // used: it reshapes relations into `{relationshipType, artifactUri, …}` and drops
 // raw dotted field keys, so it can satisfy neither consumer.
 export async function fetchWorkItemDetails(orgUrl, project, id) {
-  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] });
+  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] }, { orgUrl, project });
   const item = (Array.isArray(batch) ? batch : [])[0];
   return {
     id: item?.id ?? id,
@@ -288,7 +324,7 @@ export async function fetchWorkItemDetails(orgUrl, project, id) {
 }
 
 export async function fetchWorkItemComments(orgUrl, project, id) {
-  const data = await callAdoCli("getWorkItemComments", { id, order: "asc", top: 200 });
+  const data = await callAdoCli("getWorkItemComments", { id, order: "asc", top: 200 }, { orgUrl, project });
   const comments = data?.comments || [];
   return comments.map((c) => ({
     id: c.id,
@@ -332,7 +368,7 @@ export function extractLinkedPrIds(relations) {
 const VOTE_MAP = { 10: "approved", 5: "approvedWithSuggestions", 0: "noVote", "-5": "waitingForAuthor", "-10": "rejected" };
 
 export async function fetchPrDetails(orgUrl, project, repository, prId) {
-  const pr = await callAdoCli("getPullRequest", { repository, pullRequestId: prId });
+  const pr = await callAdoCli("getPullRequest", { repository, pullRequestId: prId }, { orgUrl, project });
 
   return {
     prId: pr.pullRequestId,
@@ -362,7 +398,7 @@ export async function isActivePr(orgUrl, project, repository, prId) {
 }
 
 export async function fetchUnresolvedThreads(orgUrl, project, repository, prId) {
-  const data = await callAdoCli("getPullRequestComments", { repository, pullRequestId: prId });
+  const data = await callAdoCli("getPullRequestComments", { repository, pullRequestId: prId }, { orgUrl, project });
   const threads = data?.threads || [];
   const result = [];
 
@@ -420,7 +456,7 @@ export async function fetchBuildStatus(orgUrl, project, sourceBranch, repository
       repositoryType: "TfsGit",
       top: 5,
       queryOrder: "startTimeDescending",
-    });
+    }, { orgUrl, project });
   } catch {
     return [];
   }
@@ -461,7 +497,7 @@ export async function fetchBuildStatus(orgUrl, project, sourceBranch, repository
 
 async function fetchBuildFailureLogs(orgUrl, project, buildId) {
   try {
-    const timeline = await callAdoCli("getBuildTimeline", { buildId });
+    const timeline = await callAdoCli("getBuildTimeline", { buildId }, { orgUrl, project });
 
     const failedRecords = (timeline?.records || []).filter(
       (r) => r.result === "failed" && r.log?.id
@@ -471,7 +507,7 @@ async function fetchBuildFailureLogs(orgUrl, project, buildId) {
     const logId = failedRecords[0].log.id;
 
     // Get log metadata to know line count
-    const logs = await callAdoCli("getBuildLog", { buildId });
+    const logs = await callAdoCli("getBuildLog", { buildId }, { orgUrl, project });
     const logList = Array.isArray(logs) ? logs : [];
     const logEntry = logList.find((l) => l.id === logId);
     const lineCount = logEntry?.lineCount || 200;
@@ -480,7 +516,7 @@ async function fetchBuildFailureLogs(orgUrl, project, buildId) {
     const startLine = Math.max(1, lineCount - 150);
     const logContent = await callAdoCli("getBuildLog", {
       buildId, logId, startLine, endLine: lineCount,
-    });
+    }, { orgUrl, project });
 
     const lines = logContent?.lines || [];
     return lines.length > 0 ? lines.join("\n") : null;
