@@ -133,8 +133,8 @@ warn it appears already resolved and STOP. State guide:
 to `Active` (or the process-template equivalent):
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updateWorkItem --structured <<'ADOJSON'
-{ "id": <id>, "state": "Active", "reason": "Implementation started" }
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updateWorkItemState --structured <<'ADOJSON'
+{ "id": <id>, "state": "Active", "comment": "Implementation started" }
 ADOJSON
 ```
 
@@ -541,7 +541,7 @@ tracked child work items first:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createWorkItem --structured <<'ADOJSON'
-{ "type": "Task", "title": "[#<parent-id>] <checkpoint>", "description": "<checkpoint detail>" }
+{ "workItemType": "Task", "title": "[#<parent-id>] <checkpoint>", "description": "<checkpoint detail>" }
 ADOJSON
 ```
 
@@ -551,7 +551,7 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createLink --structured <<'ADOJS
 ADOJSON
 ```
 
-Set each Done/Closed as it completes (via `updateWorkItem`, same shape as
+Set each Done/Closed as it completes (via `updateWorkItemState`, same shape as
 Phase 1.1).
 
 <outcome_handling>
@@ -562,7 +562,7 @@ Phase 1.1).
   via `addWorkItemComment` with the diagnostics —
   `[<dev name>'s bot] Implementation blocked: <summary>` (error output, what was
   tried, root-cause hypothesis) — revert the work item to `Active` when
-  possible (via `updateWorkItem`), then STOP. Do not continue to publish.
+  possible (via `updateWorkItemState`), then STOP. Do not continue to publish.
 </outcome_handling>
 
 ### Phase 2.4 — Finish & Publish
@@ -591,7 +591,7 @@ After the PR is created, add a comment via `addWorkItemComment`:
 
 Then update state to `Resolved` (or equivalent — see
 [../../references/ado-state-transitions.md](../../references/ado-state-transitions.md))
-via `updateWorkItem`.
+via `updateWorkItemState`.
 
 ### Phase 2.5 — Stop
 

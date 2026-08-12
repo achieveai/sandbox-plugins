@@ -86,7 +86,7 @@ directly (no external drafting skill or review agent is delegated to):
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-   { "wiql": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<keyword>'" }
+   { "query": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<keyword>'" }
    ADOJSON
    ```
 
@@ -351,7 +351,7 @@ Call `listWorkItems` with the proposed title:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-{ "wiql": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<proposed title>'" }
+{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<proposed title>'" }
 ADOJSON
 ```
 
@@ -383,7 +383,7 @@ preview after any edit. **Never create without explicit confirmation.**
 
 ## Phase 4 — Create
 
-After confirmation, call `createWorkItem` with `type`, `title`, `description`
+After confirmation, call `createWorkItem` with `workItemType`, `title`, `description`
 (Markdown), `areaPath` (omit if default), `iterationPath` (omit if default),
 `assignedTo` (omit if unassigned), and `additionalFields` including
 `Microsoft.VSTS.Common.Priority` (1-4):
@@ -391,7 +391,7 @@ After confirmation, call `createWorkItem` with `type`, `title`, `description`
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createWorkItem --structured <<'ADOJSON'
 {
-  "type": "<Bug|Task|User Story>",
+  "workItemType": "<Bug|Task|User Story>",
   "title": "<title>",
   "description": "<body>",
   "areaPath": "<Project>\\<Team>",
