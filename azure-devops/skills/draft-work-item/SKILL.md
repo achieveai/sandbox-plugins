@@ -58,14 +58,23 @@ Propose a type from the raw input:
 
 If the type isn't obvious, show the options and ask — do not guess.
 
-Type source: call `getWorkItemTypes` once; map to **Bug / User Story (or
-PBI) / Task**:
+Type source: resolve the process ID once via `getProcesses`, then call
+`getWorkItemTypes` with it; map to **Bug / User Story (or PBI) / Task**:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getProcesses --structured <<'ADOJSON'
+{}
+ADOJSON
+```
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getWorkItemTypes --structured <<'ADOJSON'
 { "processId": "<process-id>" }
 ADOJSON
 ```
+
+Reuse this same `<process-id>` for `getWorkItemTypeFields` in Phase 3.2 below
+— do not re-resolve it.
 
 Both routes below work the phases in order, but loop freely: new
 understanding sends you back to re-ground earlier phases. Ask questions **one
@@ -86,7 +95,7 @@ directly (no external drafting skill or review agent is delegated to):
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-   { "query": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<keyword>'" }
+   { "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<keyword>'" }
    ADOJSON
    ```
 
@@ -314,7 +323,8 @@ See also
 
 Resolve **Area Path + Team**: call `getTeams`, match the description to a team
 or ask, then derive area path `<Project>\<Team>` (adapt via
-`getWorkItemTypeFields` for `System.AreaPath`). Propose `getCurrentSprint`;
+`getWorkItemTypeFields` — using the `<process-id>` already resolved via
+`getProcesses` in Phase 1 — for `System.AreaPath`). Propose `getCurrentSprint`;
 offer a different sprint (`getSprints`) or "Backlog — no sprint". Priority
 maps to `Microsoft.VSTS.Common.Priority` numeric: Critical=1, High=2,
 Medium=3, Low=4.
@@ -351,7 +361,7 @@ Call `listWorkItems` with the proposed title:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.Title] CONTAINS '<proposed title>'" }
+{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<proposed title>'" }
 ADOJSON
 ```
 

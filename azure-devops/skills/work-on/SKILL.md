@@ -547,7 +547,7 @@ ADOJSON
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createLink --structured <<'ADOJSON'
-{ "sourceId": <parent-id>, "targetId": <child-id>, "linkType": "Child" }
+{ "sourceId": <parent-id>, "targetId": "<child-id>", "linkType": "System.LinkTypes.Hierarchy-Forward" }
 ADOJSON
 ```
 
