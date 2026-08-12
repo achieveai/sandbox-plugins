@@ -22,21 +22,57 @@ const ADO_CLI_PATH = path.resolve(
 
 function callAdoCli(method, params) {
   return new Promise((resolve, reject) => {
-    const child = spawn("node", [ADO_CLI_PATH, method, "--structured"], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    // `error` and `close` are not mutually exclusive, and scan.mjs runs these under a
+    // bounded-concurrency Promise.allSettled — a promise that settles twice (or never)
+    // either double-releases or permanently holds a semaphore permit. Settle exactly once.
+    let settled = false;
+    const settle = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      fn(value);
+    };
+
+    let child;
+    try {
+      child = spawn("node", [ADO_CLI_PATH, method, "--structured"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch (err) {
+      reject(new Error(`failed to spawn ado-cli.js for ${method}: ${err.message}`));
+      return;
+    }
+
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
     child.stderr.on("data", (d) => { stderr += d; }); // captured for diagnostics only — never treated as failure
+
+    // Spawn failures (e.g. ENOENT when `node` is not on PATH) emit `error` and never
+    // emit `close`. Without this handler the promise would hang forever and the
+    // unhandled 'error' event would crash the process.
+    child.on("error", (err) => {
+      settle(reject, new Error(`failed to spawn ado-cli.js for ${method}: ${err.message}`));
+    });
+
     child.on("close", (code) => {
       if (code === 0) {
-        try { resolve(JSON.parse(stdout)); }
-        catch (e) { reject(new Error(`ado-cli.js returned non-JSON stdout for ${method}: ${stdout.slice(0, 500)}`)); }
+        let parsed;
+        try {
+          parsed = JSON.parse(stdout);
+        } catch {
+          settle(reject, new Error(`ado-cli.js returned non-JSON stdout for ${method}: ${stdout.slice(0, 500)}`));
+          return;
+        }
+        settle(resolve, parsed);
       } else {
-        reject(new Error(`ado-cli.js ${method} exited ${code}: ${stdout || stderr}`));
+        settle(reject, new Error(`ado-cli.js ${method} exited ${code}: ${stdout || stderr}`));
       }
     });
+
+    // The CLI exits before draining stdin whenever AZURE_DEVOPS_ORG_URL /
+    // AZURE_DEVOPS_PROJECT are unset, which surfaces here as an EPIPE/ECONNRESET
+    // stream error. Swallow it — `close` still fires and reports the real exit code.
+    child.stdin.on("error", () => { /* child exited early; `close` reports the cause */ });
     child.stdin.write(JSON.stringify(params));
     child.stdin.end();
   });
@@ -104,27 +140,66 @@ export function getDevIdentity(cwd) {
 // Sprint
 // ---------------------------------------------------------------------------
 
+// `getCurrentSprint` returns the raw iteration on success. When the team has no
+// `$timeframe=current` iteration the tool's rawData is `null`, and `--structured`
+// falls through the `??` chain to the text envelope `{content:[…]}` with exit 0.
+// So a truthy response proves nothing — presence must be tested on `.path`.
+function asIteration(value) {
+  return value && typeof value === "object" && typeof value.path === "string" && value.path ? value : null;
+}
+
+async function fetchCurrentIteration(teamParams) {
+  try {
+    return asIteration(await callAdoCli("getCurrentSprint", teamParams));
+  } catch (err) {
+    // A non-zero exit here (bad team, config, auth) must not abort the whole
+    // resolution chain — the source wrapped every attempt in try/catch too.
+    console.error(`[API] getCurrentSprint failed: ${err.message}`);
+    return null;
+  }
+}
+
+async function fetchLatestIteration(teamParams) {
+  try {
+    const all = await callAdoCli("getSprints", teamParams);
+    const list = Array.isArray(all) ? all : [];
+    return list.length > 0 ? asIteration(list[list.length - 1]) : null;
+  } catch (err) {
+    console.error(`[API] getSprints failed: ${err.message}`);
+    return null;
+  }
+}
+
 export async function getCurrentSprint(orgUrl, project, team) {
-  // The CLI's getCurrentSprint resolves the default team internally when no
-  // teamId is given. This replaces the source's client-side team-name-candidate
-  // guessing ([team] or [project, "${project} Team"]) — the CLI's own default-team
-  // resolution is the more robust equivalent.
-  let sprint = await callAdoCli("getCurrentSprint", team ? { teamId: team } : {});
+  // Team resolution: the CLI does NOT resolve a default team itself — it passes
+  // `teamId` straight through as the TeamContext's `team` field (undefined when
+  // omitted) and the Azure DevOps *server* resolves the project's default team.
+  // That replaces the source's client-side team-name-candidate guessing
+  // ([team] or [project, "${project} Team"]).
+  const teamParams = team ? { teamId: team } : {};
+
+  // Attempt 1: current iteration. Attempt 2 mirrors the source's second fallback —
+  // no current sprint (between sprints, or iteration dates that don't bracket today)
+  // means take the latest iteration from the full list rather than aborting the run.
+  let sprint = await fetchCurrentIteration(teamParams);
+  if (!sprint) sprint = await fetchLatestIteration(teamParams);
 
   if (!sprint) {
-    // Last resort: discover a team and retry once (mirrors source's
-    // list-teams-and-use-first-one fallback).
+    // Last resort: discover a team explicitly and retry both lookups against it
+    // (mirrors the source's list-teams-and-use-the-first-one fallback).
     try {
       const teams = await callAdoCli("getTeams", {});
       const list = Array.isArray(teams) ? teams : [];
       if (list.length > 0) {
         console.error(`[API] Using discovered team: "${list[0].name}"`);
-        sprint = await callAdoCli("getCurrentSprint", { teamId: list[0].id });
+        const discovered = { teamId: list[0].id };
+        sprint = await fetchCurrentIteration(discovered);
+        if (!sprint) sprint = await fetchLatestIteration(discovered);
       }
     } catch { /* ignore */ }
   }
 
-  if (!sprint || !sprint.path) {
+  if (!sprint) {
     throw new Error("No sprint iterations found. Check team/project config.");
   }
 
@@ -151,9 +226,16 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
     ORDER BY [System.ChangedDate] DESC
   `;
 
-  // days: 3650 (~10y) overrides listWorkItems' default 7-day recency window —
-  // the source WIQL had no date bound, it scoped purely by IterationPath/State.
-  const data = await callAdoCli("listWorkItems", { query: wiql, top: 100, days: 3650 });
+  // No `days` param. listWorkItems injects `AND [System.ChangedDate] >= @today - N`
+  // (default 7, clamped to a hard maximum of 30 — a wider window is not expressible)
+  // UNLESS the query text already mentions [System.ChangedDate], in which case the
+  // filter is skipped entirely. Both WIQL bodies here end in
+  // `ORDER BY [System.ChangedDate] DESC`, which trips that bypass, so the source's
+  // unbounded IterationPath/State scoping is preserved.
+  // DO NOT remove or rewrite the ORDER BY clause without re-checking this: dropping
+  // it silently re-arms a 30-day cutoff that hides older assigned work items with
+  // no error.
+  const data = await callAdoCli("listWorkItems", { query: wiql, top: 100 });
   const ids = (data?.workItems || []).map((wi) => wi.id);
   if (ids.length > 0) return ids;
 
@@ -168,7 +250,8 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
     ORDER BY [System.ChangedDate] DESC
   `;
 
-  const fallback = await callAdoCli("listWorkItems", { query: fallbackWiql, top: 100, days: 3650 });
+  // Same ORDER BY [System.ChangedDate] bypass as above — see the note on the first call.
+  const fallback = await callAdoCli("listWorkItems", { query: fallbackWiql, top: 100 });
   return (fallback?.workItems || []).map((wi) => wi.id);
 }
 
@@ -176,43 +259,32 @@ export async function querySprintWorkItems(orgUrl, project, sprintPath) {
 // Work Items
 // ---------------------------------------------------------------------------
 
+// NOTE (applies to every getWorkItemsBatch call below): no `fields` list may be
+// passed. The bundle always calls witApi.getWorkItems(ids, fields, undefined,
+// WorkItemExpand.Relations), and Azure DevOps rejects `fields` combined with
+// `$expand` (VS402337 "The fields parameter cannot be used with the expand
+// parameter"). Sending `fields` fails the request outright. Omitting it returns
+// every field plus the relations, and we select what we need client-side.
+
 export async function fetchWorkItemChangedDate(orgUrl, project, id) {
-  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id], fields: ["System.ChangedDate"] });
+  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] });
   const item = (Array.isArray(batch) ? batch : [])[0];
   return item?.fields?.["System.ChangedDate"] || new Date(0).toISOString();
 }
 
-// Fields fetched raw (dotted System.*/Microsoft.VSTS.* keys preserved) via
-// getWorkItemsBatch, merged with getWorkItemById's relations (reshaped back to
-// the {rel, url} contract extractLinkedPrIds() expects). getWorkItemById's own
-// curated output omits AcceptanceCriteria/raw fields, so it is used for
-// relations only; getWorkItemsBatch is used for every field value.
-const DETAIL_FIELDS = [
-  "System.Title",
-  "System.WorkItemType",
-  "System.State",
-  "System.AreaPath",
-  "System.IterationPath",
-  "System.Description",
-  "Microsoft.VSTS.Common.AcceptanceCriteria",
-  "Microsoft.VSTS.Common.Priority",
-];
-
+// getWorkItemsBatch is the only catalog method that yields work item relations in
+// their raw `{rel, url, attributes}` shape — exactly the contract the source
+// produced and extractLinkedPrIds() parses. getWorkItemById is deliberately NOT
+// used: it reshapes relations into `{relationshipType, artifactUri, …}` and drops
+// raw dotted field keys, so it can satisfy neither consumer.
 export async function fetchWorkItemDetails(orgUrl, project, id) {
-  const [batch, byId] = await Promise.all([
-    callAdoCli("getWorkItemsBatch", { ids: [id], fields: DETAIL_FIELDS }),
-    callAdoCli("getWorkItemById", { id, fullDescription: true }),
-  ]);
-
+  const batch = await callAdoCli("getWorkItemsBatch", { ids: [id] });
   const item = (Array.isArray(batch) ? batch : [])[0];
-  const relations = (byId?.relations || []).map((r) => {
-    if (r.type === "ArtifactLink") {
-      return { rel: "ArtifactLink", url: r.artifactUri };
-    }
-    return { rel: r.type, relatedWorkItemId: r.relatedId };
-  });
-
-  return { id: item?.id ?? id, fields: item?.fields ?? {}, relations };
+  return {
+    id: item?.id ?? id,
+    fields: item?.fields ?? {},
+    relations: item?.relations ?? [],
+  };
 }
 
 export async function fetchWorkItemComments(orgUrl, project, id) {
@@ -296,10 +368,24 @@ export async function fetchUnresolvedThreads(orgUrl, project, repository, prId) 
 
   for (const thread of threads) {
     if (thread.status !== "active" && thread.status !== "pending") continue;  // Only active or pending
-    // classification === "system" is the CLI's closest equivalent to the source's
-    // CodeReviewAutoClosedByPushId/CodeReviewVoteUpdatedByIdentity system-thread filter.
+    // Thread-level classification replaces the source's two per-thread property probes
+    // (properties.CodeReviewAutoClosedByPushId / CodeReviewVoteUpdatedByIdentity):
+    // the CLI's curated output does not expose thread.properties at all, but its own
+    // classifyThread() maps CodeReviewThreadType "VoteUpdate"/"RefUpdate"/"StatusUpdate"/…
+    // and any thread with no human-authored comment to "system", which is a superset of
+    // the vote-update case. Auto-closed-by-push threads carry status closed/fixed and are
+    // already excluded by the status filter above.
     if (thread.classification === "system") continue;
 
+    // UNAVOIDABLE FIDELITY LOSS: the source additionally filtered comments to
+    // `commentType === 1` (text only), dropping codeChange/system comments. The CLI
+    // maps each comment to {id, author, content, publishedDate, isReply, likesCount}
+    // and does not surface commentType, so that filter cannot be reproduced here —
+    // thread-level classification/status above is the only available replacement.
+    // Residual effect: on a *mixed* thread (human text plus non-text entries) the
+    // non-text entries now appear in comments[], and a thread whose only content was
+    // non-text is no longer skipped by the comments.length check. All-system threads
+    // are still dropped, by classifyThread rather than by the per-comment filter.
     const comments = thread.comments || [];
     if (comments.length === 0) continue;
 
