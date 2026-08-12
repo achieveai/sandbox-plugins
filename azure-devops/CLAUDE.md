@@ -19,7 +19,7 @@ Rules:
 
 ## Authentication — sandbox-auth only, zero PAT surface
 
-Before the first Azure DevOps CLI call in a session, run `sandbox-auth:azure-devops` (pass the target org if known). If a CLI call fails with `E_AUTH`, run it once and retry. **Never ask the user to supply a PAT, token, or credential file** — this plugin has no PAT interface anywhere.
+Before the first Azure DevOps CLI call in a session, run `sandbox-auth:azure-devops` (pass the target org if known). If a CLI call fails with an auth error—`E_AUTH` in this plugin's vocabulary; the CLI never prints that token, so recognize an HTTP 401/403, `unauthorized`, `authentication failed`, or a proxy `403 denied` inside the structured error body (see `references/error-codes.md`)—run `sandbox-auth:azure-devops` once more, then retry the call once. **Never ask the user to supply a PAT, token, or credential file** — this plugin has no PAT interface anywhere.
 
 ## Proxy and CA preconditions (session-level, not per-call)
 
