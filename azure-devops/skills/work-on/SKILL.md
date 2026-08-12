@@ -144,7 +144,7 @@ Add a comment:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" addWorkItemComment --structured <<'ADOJSON'
-{ "id": <id>, "comment": "[<dev name>'s bot] Starting analysis." }
+{ "id": <id>, "text": "[<dev name>'s bot] Starting analysis." }
 ADOJSON
 ```
 
@@ -264,7 +264,7 @@ tool categories even when the work item seems simple.
 
   ```bash
   node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listPullRequests --structured <<'ADOJSON'
-  { "status": "completed", "top": 20 }
+  { "repository": "<repository>", "status": "completed", "top": 20 }
   ADOJSON
   ```
 

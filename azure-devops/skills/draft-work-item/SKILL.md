@@ -63,7 +63,7 @@ PBI) / Task**:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getWorkItemTypes --structured <<'ADOJSON'
-{}
+{ "processId": "<process-id>" }
 ADOJSON
 ```
 
