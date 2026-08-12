@@ -1010,13 +1010,28 @@ Expected: 0 matches.
 ```powershell
 Select-String -Path "azure-devops\**\*" -Pattern "AZURE_DEVOPS_PAT|AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN|AZURE_DEVOPS_BEARER_TOKEN|--pat "
 ```
-Expected: 0 matches outside CLAUDE.md's own negative-instruction Privacy section wording (which does not name the var literally — recheck it doesn't).
 ```powershell
 Select-String -Path "azure-devops\**\*" -Pattern "env\b|printenv|echo \`"\`$HTTP"
 ```
-Expected: 0 matches (no environment-dump instructions).
+Expected for both greps: 0 matches, **except** hits that fall in one of these three places (same list for both patterns — see spec Appendix C, V5):
+1. CLAUDE.md's / README's own negative-instruction prose *outside* the tagged block (explaining no PAT path / no env dump exists — recheck neither names an actual var value). Currently zero-hit at commit `27cc8bd` — both README's tier summary and everything in CLAUDE.md outside the tag trip neither probe; retained as a permissive allowance in case such prose is reintroduced outside the tag.
+2. `references/method-catalog.md`'s generated usage banner (first grep only — the banner names no env dump). Currently the only non-block hit: 1 occurrence, secret probe only.
+3. Inside a file's `<mutation_privacy_policy>...</mutation_privacy_policy>` span — **only** once V6(b) below confirms that span hashes identical to the canonical text across all 10 tag-wrapped occurrences tree-wide (`CLAUDE.md`'s canonical copy + 9 skill/agent restatements). A hit outside a verified span, or in a block whose hash differs, is still a finding. Currently accounts for the remaining hits: 10 of 11 secret-probe hits, all 10 env-probe hits.
+No hit anywhere may be an actual secret value, a working `--pat` recommendation, or an instruction to print/echo a real proxy value — the block's own text only prohibits those things.
 
-- [ ] **V6 — Port fidelity review (human read, 5 checks)** — see Task 17 (this check is executed there, against the full file set, since it needs every prior task complete).
+- [ ] **V6 — Port fidelity review (human read, 5 checks)** — see Task 17 (this check is executed there, against the full file set, since it needs every prior task complete). Two additional required sub-checks, run branch-wide, every release — documented commands below, not yet backed by a committed test harness (the execution/hashing scripts referenced are currently ephemeral under `.superpowers/temp/`; promoting them to tracked, repo-committed scripts is future work):
+
+  - [ ] **V6(a) — Heredoc terminator / sentinel gate.**
+    ```powershell
+    Select-String -Path "azure-devops\**\*.md" -Pattern "^[ \t]+ADOJSON[ \t]*$"
+    ```
+    Expected: 0 matches (every quoted-heredoc terminator sits at column 0 — an indented one silently swallows the terminator and everything after it into the JSON body; this is exactly C-1 from Task 16). Then extract every fenced ` ```bash ` block containing `ado-cli.js <<'ADOJSON'`, stub the CLI call, append a sentinel line, and run under `bash`. Expected: every real invocation block prints its sentinel (the 2 `CLAUDE.md`/`README.md` `<method>`-placeholder template blocks are excluded — they cannot execute and aren't canonical invocations).
+
+  - [ ] **V6(b) — Mutation & Privacy Policy block identity + coverage.**
+    ```powershell
+    Select-String -Path "azure-devops\**\*.md" -Pattern "<mutation_privacy_policy>" | Select-Object -ExpandProperty Path
+    ```
+    Expected: exactly 10 files — `CLAUDE.md` (the canonical copy) plus 9 restatements: `work-on`, `publish-pr`, `babysit-pr`, `work-items`, `work-my-backlog`, `draft-work-item`, `assistant`, `pr-tender`, `babysit-pr-worker`. `README.md` (references the block by name but carries no tag-wrapped copy), `mentions`, and the 5 `commands/*.md` wrappers must show 0 (they cannot mutate). Then extract each file's `<mutation_privacy_policy>...</mutation_privacy_policy>` span and hash it (documented step; no committed script performs this yet). Expected: a single distinct SHA-256 across all 10. A total other than 10, a restatement count other than 9, or more than one distinct hash, is a finding — and invalidates V5's block exception until fixed.
 
 - [ ] **V7 — Marketplace/docs consistent**
 ```powershell
@@ -1050,6 +1065,14 @@ Expected: `True`.
 **Files:** none created; git operations only.
 
 - [ ] **Step 1: Diff every ported file against its source counterpart** (V6, the 5 checks):
+
+*Note: this Step 1 (a)-(e) is the concrete fidelity-diff execution of spec Appendix C's V6(c) (phase/gate
+preservation) and V6(e) (port fidelity diff-to-rule mapping) specifically. Spec V6(a) (canonical-invocation
+heredoc form + terminator/sentinel gate) and V6(b) (mutation-policy block identity + coverage) run as
+their own standing checks in Task 16 above; V6(d) (error handling branches on exit code/stdout) is
+reviewed inline while reading each file below. The two "(a)-(e)" lists label different things by design —
+this Step's letters are a diff-execution breakdown, not a restatement of the spec's V6(a)-(e) gate list.*
+
 (a) Confirm every phase/section header name in `work-on`/`draft-work-item` matches its `development/` source 1:1 (already counted in Task 11 Step 8 / re-confirm for Task 12 the same way).
 (b) Confirm every skill/agent/command frontmatter `name:` matches the unprefixed target name from the component mapping table.
 (c) Confirm every reference file path resolves (no dangling `references/...` or `skills/.../reference/...` link).

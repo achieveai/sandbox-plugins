@@ -313,6 +313,20 @@ of a runtime guarantee for removing a whole layer of code. Recorded in
   before making changes", `draft-work-item`'s mandatory preview) keep those prompts
   exactly as-is. This layer does not touch them.
 
+**Concrete restatement mechanism.** A plugin-root `CLAUDE.md` is documentation, not a guaranteed
+always-loaded context file (see I-1 in the Task 16 release-gate history) — so the tiers plus the
+Security-and-privacy bullets live as a canonical, tag-wrapped `<mutation_privacy_policy>` block in
+`CLAUDE.md` itself, and are additionally restated byte-identical in every skill/agent whose mutation
+surface could trip them. That restatement set is exactly the components Appendix A's Tier-1 set names as
+referencing an ordinary mutation, plus the three agents — 9 components total: `work-on`, `publish-pr`,
+`babysit-pr`, `work-items`, `work-my-backlog`, `draft-work-item`, `assistant`, `pr-tender`,
+`babysit-pr-worker`. `mentions` and the 5 `commands/*.md` dispatch wrappers carry no copy, deliberately —
+they have zero CLI mutation surface, and an 11th copy would be policy text in a file that cannot trip it.
+`README.md` references the block by name but does not itself carry a tag-wrapped copy. V6(b) verifies
+that there are exactly 10 tag-wrapped `<mutation_privacy_policy>` occurrences tree-wide — the 1 canonical
+copy in `CLAUDE.md` plus the 9 restatements, named above — and that all 10 hash identical (single
+distinct SHA-256).
+
 ## Error handling
 
 Skills read the exit code and stdout directly. `references/error-codes.md` maps what the CLI returns to
@@ -566,8 +580,8 @@ credential-free**, so all can run in ordinary CI or by hand. Detail:
 | **V2 — Bundled CLI intact** | Against the exact shipped `ado-cli.js`: bare usage exits `1` by design (usage/error text, no method given); `list --json`, `docs --out <tmp>`, and `help <method>` for a sample all exit `0` with no env vars and no network. `provenance.json` size + hash match. `method-catalog.md` byte-identical to a fresh regeneration, so it cannot silently drift. |
 | **V3 — Method refs + Tier 1 resolve** | Every bare method name in every ported file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier 1 list in `CLAUDE.md` equals the referenced set. |
 | **V4 — Self-containment + naming** | Zero hits under `azure-devops/` for `ado:`, `development:`, `gh:`, `code-reviewer:`, `debugging:` — confirming R6 removed every external dependency, not just the obvious ones. Zero hits for `azure-devops-` in any component name, path, or `skills:` entry. Colon-free `ado-` grep clean outside the four allowed filenames. |
-| **V5 — Privacy scan** | No PAT surface, no environment disclosure. Two greps. |
-| **V6 — Port fidelity review** | The human read no automation can replace: every ported file still does what its source did. Done last, against the finished tree. |
+| **V5 — Privacy scan** | No PAT surface, no environment disclosure. Two greps, with a narrow, hash-gated exception for the `<mutation_privacy_policy>` block's own prohibition text — see Appendix C and V6(b). |
+| **V6 — Port fidelity review** | The human read no automation can replace: every ported file still does what its source did. Plus two required sub-checks (documented commands, not yet a committed test harness): (a) every canonical-invocation heredoc terminates at column 0 and executes clean, (b) all 10 mutation-policy occurrences (`CLAUDE.md`'s canonical copy + 9 skill/agent restatements) are present and hash-identical. Done last, against the finished tree. |
 | **V7 — Marketplace/docs** | `marketplace.json` parses; the new entry's `source` resolves to a real directory; README's new section and updated Extensibility reference present. |
 | **V8 — Source repo untouched** | `claude_plugins` has zero uncommitted changes; `ado/scripts/ado-cli.js` and everything else in the source `ado/` plugin remain exactly as before. |
 
@@ -634,13 +648,35 @@ Build 11. `docs --out <dir>` emits **131 files** — it also writes an index `RE
 130 `<method>-reference.md` files. **Do not derive the method count from a file count.**
 
 **V5 — two greps over the whole plugin tree.** First: `AZURE_DEVOPS_PAT`,
-`AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`, `AZURE_DEVOPS_BEARER_TOKEN`, `--pat`. The only permitted hits are
-this rule's own negative documentation (README / `CLAUDE.md` explaining that no PAT path exists), and the
-generated `references/method-catalog.md`'s reproduction of the CLI's own usage banner — required to remain
-present verbatim by V2's byte-identity check, and not itself a plugin PAT surface since the plugin never
-passes `--pat`. Zero hits in any instruction or script that would supply a credential, and in particular
-`ado-api.mjs` must contain no `getAuthHeader`. Second: no file may instruct an `env` / `printenv` / `echo "$HTTP_PROXY"` /
-`echo "$HTTPS_PROXY"` style environment dump.
+`AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`, `AZURE_DEVOPS_BEARER_TOKEN`, `--pat`. Second: no file may instruct
+an `env` / `printenv` / `echo "$HTTP_PROXY"` / `echo "$HTTPS_PROXY"` style environment dump. The same
+three exceptions apply to both greps:
+
+1. This rule's own negative documentation outside the tagged block (README / `CLAUDE.md` prose
+   explaining that no PAT path exists and that no environment dump is permitted, not itself wrapped in
+   `<mutation_privacy_policy>` tags). **Currently zero-hit** — as of the block's latest content (commit
+   `27cc8bd`), both README's tier summary and everything in `CLAUDE.md` outside the tag trip neither
+   probe; the exception is retained as a permissive allowance in case negative prose is reintroduced
+   outside the tag, not because it currently accounts for any observed hit.
+2. The generated `references/method-catalog.md`'s reproduction of the CLI's own usage banner — required
+   to remain present verbatim by V2's byte-identity check, and not itself a plugin PAT surface since the
+   plugin never passes `--pat`. (Applies only to the first grep; the banner names no environment dump.)
+   Currently the only non-block hit: 1 occurrence, first grep only.
+3. **Hash-gated `<mutation_privacy_policy>` block exception.** A hit that falls inside the span between a
+   file's `<mutation_privacy_policy>` and `</mutation_privacy_policy>` tags — the canonical copy in
+   `CLAUDE.md`, or one of its 9 restatements in every mutating skill/agent, see
+   [Mutation policy](#mutation-policy) — is permitted **only once V6(b) has confirmed that file's span
+   hashes identical to the canonical text** (a single distinct SHA-256 across all 10 tag-wrapped
+   occurrences). A hit outside a verified span, or inside a block whose hash differs from the canonical
+   one, is **not** covered by this exception and is a finding, exactly as before this block existed. This
+   exception is deliberately narrow, not a blanket allowance: the block's own text is exclusively a
+   *prohibition* of `--pat` / `env` / `printenv` / proxy-value-printing — it never contains an actual
+   secret, a working PAT recommendation, or an instruction to print a real value. V5 must still fail on
+   any of those, block or no block, anywhere in the tree. **Currently accounts for every other hit:** 10
+   of 11 secret-probe hits and all 10 env-probe hits fall inside a tag span.
+
+Zero hits in any instruction or script that would supply a credential, and in particular `ado-api.mjs`
+must contain no `getAuthHeader`.
 
 **V4 — naming checks, two greps.**
 
@@ -659,9 +695,32 @@ things no automated check can. Deliberately last, so it runs against the finishe
 most weight in a plugin whose behavior *is* its instructions.
 
 - (a) Every former MCP tool call became a correct [canonical invocation](#canonical-invocation-form) —
-  `--structured` present, JSON on stdin, no `--input`, quoted heredoc, quoted `${CLAUDE_PLUGIN_ROOT}`.
+  `--structured` present, JSON on stdin, no `--input`, quoted heredoc, quoted `${CLAUDE_PLUGIN_ROOT}`,
+  and the heredoc's terminator line (`ADOJSON` for a `<<'ADOJSON'` opener) sitting at column 0 with no
+  leading whitespace. A quoted, non-`<<-` heredoc only recognizes an exact, unindented terminator match —
+  an indented one silently folds itself and every following line into the JSON body instead of ending it
+  (this exact defect: C-1, Task 16). Required, every release, by both: a static grep for an indented
+  terminator (`^[ \t]+ADOJSON[ \t]*$` across every `.md` file, expect 0 matches) **and** executing every
+  such fenced block against a stubbed CLI with a trailing sentinel line, confirming the sentinel prints.
+  This is a release-checklist requirement, not a claim that a committed test harness already runs it —
+  the extraction/stub/sentinel script that performs the execution check currently lives, uncommitted, at
+  `.superpowers/temp/exec-fences.mjs`; promoting it to a tracked, repo-committed script is future work, not
+  yet done. A block whose sentinel does not print is a finding regardless of what the static grep alone
+  shows — the two documentation-template blocks in `CLAUDE.md`/`README.md` that use a literal `<method>`
+  placeholder are excluded, since they cannot execute and are not canonical invocations.
 - (b) The [mutation policy](#mutation-policy) is restated at each step that could trip it, and no file
-  invokes a Tier 2 method or a Tier 3 method without first asking.
+  invokes a Tier 2 method or a Tier 3 method without first asking. Required sub-check, every release:
+  `CLAUDE.md` carries the canonical `<mutation_privacy_policy>...</mutation_privacy_policy>` block, and
+  every mutating skill/agent restates it byte-identical — exactly 9 restatement files (`work-on`,
+  `publish-pr`, `babysit-pr`, `work-items`, `work-my-backlog`, `draft-work-item`, `assistant`,
+  `pr-tender`, `babysit-pr-worker`; `mentions` and the 5 `commands/*.md` wrappers carry none, since they
+  cannot mutate), for 10 tag-wrapped occurrences tree-wide (1 canonical + 9 restatements). All 10
+  extracted spans must hash to a single, identical SHA-256 — the file-count check is a one-line
+  `Select-String`, runnable by hand every release; the span-extraction-and-hash step is documented intent
+  here and in the plan, not yet a committed script (same ephemeral status as V6(a)'s execution check). A
+  restatement count other than 9, a total
+  other than 10, or more than one distinct hash among the 10, is a finding — and is what V5's hash-gated
+  exception (above) depends on to stay narrow.
 - (c) R6's inline-not-delegate rewrites preserve every phase, gate, and outcome contract of the
   originals.
 - (d) Error handling branches on exit code and stdout, never on stderr being non-empty.
