@@ -351,11 +351,11 @@ azure-devops/
 │   ├── review-reception-protocol.md    verbatim from ado/references/
 │   ├── review-thread-state-machine.md  two fixes — see R7
 │   ├── ado-state-transitions.md        from development/skills/work-on/reference/ — NOT ado/ — see R6
+│   ├── provenance.json                 new — origin, byte size, content hash, copy date
 │   ├── method-catalog.md               generated, not authored — see Appendix C
 │   └── error-codes.md                  new — Appendix B
 ├── scripts/
-│   ├── ado-cli.js                      verbatim from ado/scripts/ado-cli.js
-│   └── provenance.json                 new — origin, byte size, content hash, copy date
+│   └── ado-cli.js                      verbatim from ado/scripts/ado-cli.js
 ├── skills/
 │   ├── work-on/
 │   │   ├── SKILL.md                    from ado-work-on — inline-not-delegate, R6
@@ -563,7 +563,7 @@ credential-free**, so all can run in ordinary CI or by hand. Detail:
 | Gate | Check |
 |---|---|
 | **V1 — Plugin validates** | `claude plugin validate ./azure-devops` passes. Manifest parses; every frontmatter block well-formed with `name` matching the containing directory (skills) or filename basename (agents). No component name contains `azure-devops` or `ado` (D4/R1). No `model` field expected (R12). |
-| **V2 — Bundled CLI intact** | Against the exact shipped `ado-cli.js`: bare usage, `list --json`, `docs --out <tmp>`, and `help <method>` for a sample all exit `0` with no env vars and no network. `provenance.json` size + hash match. `method-catalog.md` byte-identical to a fresh regeneration, so it cannot silently drift. |
+| **V2 — Bundled CLI intact** | Against the exact shipped `ado-cli.js`: bare usage exits `1` by design (usage/error text, no method given); `list --json`, `docs --out <tmp>`, and `help <method>` for a sample all exit `0` with no env vars and no network. `provenance.json` size + hash match. `method-catalog.md` byte-identical to a fresh regeneration, so it cannot silently drift. |
 | **V3 — Method refs + Tier 1 resolve** | Every bare method name in every ported file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier 1 list in `CLAUDE.md` equals the referenced set. |
 | **V4 — Self-containment + naming** | Zero hits under `azure-devops/` for `ado:`, `development:`, `gh:`, `code-reviewer:`, `debugging:` — confirming R6 removed every external dependency, not just the obvious ones. Zero hits for `azure-devops-` in any component name, path, or `skills:` entry. Colon-free `ado-` grep clean outside the four allowed filenames. |
 | **V5 — Privacy scan** | No PAT surface, no environment disclosure. Two greps. |
@@ -635,9 +635,11 @@ Build 11. `docs --out <dir>` emits **131 files** — it also writes an index `RE
 
 **V5 — two greps over the whole plugin tree.** First: `AZURE_DEVOPS_PAT`,
 `AZURE_DEVOPS_PERSONAL_ACCESS_TOKEN`, `AZURE_DEVOPS_BEARER_TOKEN`, `--pat`. The only permitted hits are
-this rule's own negative documentation (README / `CLAUDE.md` explaining that no PAT path exists) — zero
-hits in any instruction or script that would supply a credential, and in particular `ado-api.mjs` must
-contain no `getAuthHeader`. Second: no file may instruct an `env` / `printenv` / `echo "$HTTP_PROXY"` /
+this rule's own negative documentation (README / `CLAUDE.md` explaining that no PAT path exists), and the
+generated `references/method-catalog.md`'s reproduction of the CLI's own usage banner — required to remain
+present verbatim by V2's byte-identity check, and not itself a plugin PAT surface since the plugin never
+passes `--pat`. Zero hits in any instruction or script that would supply a credential, and in particular
+`ado-api.mjs` must contain no `getAuthHeader`. Second: no file may instruct an `env` / `printenv` / `echo "$HTTP_PROXY"` /
 `echo "$HTTPS_PROXY"` style environment dump.
 
 **V4 — naming checks, two greps.**

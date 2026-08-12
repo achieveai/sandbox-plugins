@@ -968,7 +968,7 @@ Expected: exit 0 / "valid" output, no schema errors.
 - [ ] **V2 — Bundled CLI intact + catalog fresh**
 ```powershell
 cd "B:\sources\sandbox-plugins\azure-devops\scripts"
-node ado-cli.js                     # expect exit 0, usage text
+node ado-cli.js                     # expect exit 1, usage text printed (bare invocation with no method argument exits 1 by design; see Task 1 Step 4)
 node ado-cli.js list --json         # expect exit 0, JSON array
 $tmp2 = New-Item -ItemType Directory -Force "$env:TEMP\ado-docs-verify"
 node ado-cli.js docs --out $tmp2.FullName   # expect exit 0, 131 files
