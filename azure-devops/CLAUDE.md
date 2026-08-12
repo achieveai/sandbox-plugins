@@ -30,6 +30,12 @@ Before the first Azure DevOps CLI call in a session, run `sandbox-auth:azure-dev
 
 ## Mutation Policy (3 tiers — enforced by instruction, not code)
 
+> **This file is reference documentation, not an enforcement point.** `claude plugin validate` (v2.1.228)
+> reports that a plugin-root `CLAUDE.md` is *not* loaded as project context, so nothing here is guaranteed
+> to be in context when a skill or agent runs. The enforcing copy of the rules below — plus the privacy
+> rules — is restated verbatim inside every executing component that can mutate Azure DevOps, under a
+> `<mutation_privacy_policy>` block.
+
 | Tier | Scope | Rule |
 |---|---|---|
 | 1 | Ordinary/referenced methods | Proceed normally. |
