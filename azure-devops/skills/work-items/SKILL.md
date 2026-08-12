@@ -59,7 +59,7 @@ ADOJSON
 ```
 
 2. Show current values, confirm changes with user.
-3. Apply with `updateWorkItem` or `updateWorkItemState`:
+3. Apply with `updateWorkItem` for field changes:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updateWorkItem --structured <<'ADOJSON'
@@ -67,16 +67,30 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updateWorkItem --structured <<'A
 ADOJSON
 ```
 
-(use `updateWorkItemState` in place of `updateWorkItem` when only the workflow state is changing.)
+Use `updateWorkItemState` instead when only the workflow state is changing — it takes a different body shape (`state`, not `fields`):
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updateWorkItemState --structured <<'ADOJSON'
+{ "id": <work_item_id>, "state": "<new state>" }
+ADOJSON
+```
 
 ### Link
 
 1. Identify source and target (work item, PR, commit).
-2. Create link with `createLink`:
+2. Create link with `createLink`. `repository` is required whenever `targetId` is a `PR#`, `BRANCH#`, or `COMMIT#` reference (omit it only when linking to another plain work item):
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createLink --structured <<'ADOJSON'
-{ "sourceId": <work_item_id>, "targetId": "<PR#id|COMMIT#sha|work item id>", "linkType": "<link type>" }
+{ "sourceId": <work_item_id>, "targetId": "PR#<pr_id>", "linkType": "<link type>", "repository": "<repository name>" }
+ADOJSON
+```
+
+For a work-item-to-work-item link, drop `repository` and use a plain ID (or `WI#<id>`) as `targetId`:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createLink --structured <<'ADOJSON'
+{ "sourceId": <work_item_id>, "targetId": "WI#<target_work_item_id>", "linkType": "<link type>" }
 ADOJSON
 ```
 
