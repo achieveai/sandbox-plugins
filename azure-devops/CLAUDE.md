@@ -28,28 +28,28 @@ Before the first Azure DevOps CLI call in a session, run `sandbox-auth:azure-dev
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Uppercase only — no lowercase fallback. Read natively by the CLI's HTTP client. |
 | `NODE_EXTRA_CA_CERTS` | Must be set **before** `node` starts, from whichever CA bundle var is already present (e.g. a Python/curl CA var). Node ignores `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE` / `CURL_CA_BUNDLE`. |
 
-## Mutation Policy (3 tiers — enforced by instruction, not code)
+## Mutation & Privacy Policy — canonical text (enforced by instruction, not code)
 
 > **This file is reference documentation, not an enforcement point.** `claude plugin validate` (v2.1.228)
 > reports that a plugin-root `CLAUDE.md` is *not* loaded as project context, so nothing here is guaranteed
-> to be in context when a skill or agent runs. The enforcing copy of the rules below — plus the privacy
-> rules — is restated verbatim inside every executing component that can mutate Azure DevOps, under a
-> `<mutation_privacy_policy>` block.
+> to be in context when a skill or agent runs. The block below is the **canonical** text; the enforcing
+> copies are restated **byte-identical** inside all nine executing components that can mutate Azure DevOps
+> (`work-on`, `publish-pr`, `babysit-pr`, `work-items`, `work-my-backlog`, `draft-work-item`, `assistant`,
+> `pr-tender`, `babysit-pr-worker`). Ten copies total; edit one, edit all ten, and re-verify identity.
+> Tier vocabulary used by `references/error-codes.md`: Tier 1 = bullet 1 (ordinary, proceed),
+> Tier 2 = bullet 3 (comment update/delete, forbidden), Tier 3 = bullet 4 (exceptional, confirm first).
 
-| Tier | Scope | Rule |
-|---|---|---|
-| 1 | Ordinary/referenced methods | Proceed normally. |
-| 2 | `manageWorkItemComment` update/delete | **Forbidden.** Never invoke. Post a new comment instead. |
-| 3 | Destructive methods (e.g. `mergePullRequest`) or any out-of-scope method not named in any ported file | **Confirm with the user first.** |
-
-## Comments Are Append-Only
-
-**NEVER delete, update, or edit existing Azure DevOps work item or PR comments.** Always post NEW comments. This preserves the full conversation history and audit trail. Revised plans, follow-up answers, and status updates are all new comments — never edits to previous ones. This rule applies to all skills and agents in this plugin.
+<mutation_privacy_policy>
+- **Ordinary mutations — just do them.** Invoking this workflow, or an explicit user request, authorizes the creates, updates, comments, commits, and pushes it performs by name. No extra gate is added on top. This NEVER bypasses an existing gate: confirmation prompts, mandatory previews, hard checkpoints, and `approvalSource` verifications stay exactly as written, and where a local rule is stricter, the local rule wins.
+- **Read-only discovery is not a mutation.** `ado-cli.js list --json`, `--help`, and any list/get/query method may be called freely at any time — no confirmation, even for methods this plugin does not otherwise name.
+- **Comments are append-only.** NEVER invoke `manageWorkItemComment` with `action: "update"` or `"delete"`, and never edit or delete a comment already posted on a work item or PR. To correct or supersede something, post a NEW comment. This limits comments only — a work item's own fields and state are still updated normally when the workflow or the user calls for it.
+- **Confirm the exceptional first** — name the action and the resource, and proceed only on an affirmative: destructive or irreversible methods (`mergePullRequest`, `runPipeline`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, overwrite-style `createOrUpdateWikiPage`), anything outside this workflow's stated scope, or a broad/bulk write across many items at once. Required only when the user did not ask for that action and no hard gate in this workflow already authorized it — once a checkpoint or `approvalSource` gate has passed, autonomous loops continue without further prompting.
+- **No PAT surface.** Never ask the user for a PAT, token, or credential file, and never pass `--pat`. Auth is `sandbox-auth:azure-devops` only. The CLI's stderr auth banner is an invariant: auth type `none`, PAT not set. If it ever reports a PAT or any other auth type, STOP — treat it as a credential leak and report it instead of continuing.
+- **Never dump the environment.** No `env`, `printenv`, or `echo "$HTTP_PROXY"`. Proxy variables carry a per-sandbox credential — test presence (`[ -n "$HTTPS_PROXY" ]`), never print the value.
+- **Never paste raw payloads.** Summarize CLI output, request bodies, and build/test logs; never copy them wholesale into chat, ADO comments, or state files. Redact any `token`/`pat`/`password`/`secret`/`authorization` field before quoting it.
+- **Thread resolution** follows this plugin's existing review-thread rules — nothing in this block changes them.
+</mutation_privacy_policy>
 
 ## Review Thread Resolution
 
 Threads are closed by the reviewer, or by the autonomous babysit worker once it has applied and verified the requested change. Interactive/assistive flows never resolve threads on the developer's behalf. See `references/review-thread-state-machine.md`.
-
-## Privacy
-
-Never dump the environment (`env`, `printenv`, `echo "$HTTP_PROXY"`-style output) into chat, logs, or comments. Never reference a PAT/token env var name outside this negative instruction.

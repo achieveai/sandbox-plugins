@@ -90,11 +90,11 @@ Full detail: `references/error-codes.md`.
 
 Three tiers, enforced by instruction (no runtime adapter exists to enforce it in code):
 
-1. **Ordinary** — methods any ported file already references. Proceed normally.
-2. **Forbidden** — `manageWorkItemComment` update/delete. Never invoke; post a new comment instead.
-3. **Confirm first** — destructive methods (e.g. `mergePullRequest`) or anything out of scope. Ask before invoking.
+1. **Ordinary** — methods any ported file already references, plus anything the user explicitly asks for. Proceed normally. Read-only discovery (`list --json`, `--help`, list/get/query methods) is never a mutation and never needs confirmation. Ordinary mutation never bypasses a workflow's own confirmation prompt, preview, hard checkpoint, or `approvalSource` gate — the stricter local rule wins.
+2. **Forbidden** — `manageWorkItemComment` update/delete, and editing or deleting any already-posted work item or PR comment. Never invoke; post a new comment instead. Work item fields and state are still updatable.
+3. **Confirm first** — destructive methods (e.g. `mergePullRequest`), anything out of scope, or a broad/bulk write. Ask before invoking, unless the user requested it or a hard gate in the workflow already authorized it.
 
-See `CLAUDE.md` for the full policy and the append-only comment rule.
+See `CLAUDE.md` for the canonical `<mutation_privacy_policy>` block, restated byte-identical in all nine mutating skills and agents.
 
 ## Limitations
 

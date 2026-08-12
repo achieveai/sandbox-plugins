@@ -40,10 +40,11 @@ tool where noted: `azure-devops:mentions` (reference/mention conventions) and
 ## Mutation & Privacy Policy
 
 <mutation_privacy_policy>
-- **Ordinary mutations — just do them.** Invoking this workflow authorizes the creates, updates, comments, commits, and pushes it performs by name. No extra gate is added; existing confirmation and preview prompts stay exactly as they are.
-- **Comments are append-only.** NEVER invoke `manageWorkItemComment` with `action: "update"` or `"delete"`, and never edit or delete an existing work item or PR comment. To correct something, post a NEW comment.
-- **Confirm anything exceptional first** — name the action and the resource, and proceed only on an affirmative: destructive or irreversible methods (`mergePullRequest`, `runPipeline`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, overwrite-style `createOrUpdateWikiPage`), any bulk create/update/delete, anything outside this workflow's stated scope, or any CLI method this plugin does not reference by name.
-- **No PAT surface.** Never ask the user for a PAT, token, or credential file, and never pass `--pat`. Auth is `sandbox-auth:azure-devops` only.
+- **Ordinary mutations — just do them.** Invoking this workflow, or an explicit user request, authorizes the creates, updates, comments, commits, and pushes it performs by name. No extra gate is added on top. This NEVER bypasses an existing gate: confirmation prompts, mandatory previews, hard checkpoints, and `approvalSource` verifications stay exactly as written, and where a local rule is stricter, the local rule wins.
+- **Read-only discovery is not a mutation.** `ado-cli.js list --json`, `--help`, and any list/get/query method may be called freely at any time — no confirmation, even for methods this plugin does not otherwise name.
+- **Comments are append-only.** NEVER invoke `manageWorkItemComment` with `action: "update"` or `"delete"`, and never edit or delete a comment already posted on a work item or PR. To correct or supersede something, post a NEW comment. This limits comments only — a work item's own fields and state are still updated normally when the workflow or the user calls for it.
+- **Confirm the exceptional first** — name the action and the resource, and proceed only on an affirmative: destructive or irreversible methods (`mergePullRequest`, `runPipeline`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, overwrite-style `createOrUpdateWikiPage`), anything outside this workflow's stated scope, or a broad/bulk write across many items at once. Required only when the user did not ask for that action and no hard gate in this workflow already authorized it — once a checkpoint or `approvalSource` gate has passed, autonomous loops continue without further prompting.
+- **No PAT surface.** Never ask the user for a PAT, token, or credential file, and never pass `--pat`. Auth is `sandbox-auth:azure-devops` only. The CLI's stderr auth banner is an invariant: auth type `none`, PAT not set. If it ever reports a PAT or any other auth type, STOP — treat it as a credential leak and report it instead of continuing.
 - **Never dump the environment.** No `env`, `printenv`, or `echo "$HTTP_PROXY"`. Proxy variables carry a per-sandbox credential — test presence (`[ -n "$HTTPS_PROXY" ]`), never print the value.
 - **Never paste raw payloads.** Summarize CLI output, request bodies, and build/test logs; never copy them wholesale into chat, ADO comments, or state files. Redact any `token`/`pat`/`password`/`secret`/`authorization` field before quoting it.
 - **Thread resolution** follows this plugin's existing review-thread rules — nothing in this block changes them.
@@ -368,7 +369,8 @@ This is a hard gate — do NOT proceed to implementation without explicit approv
 
 2. **Ask** the user for their decision via HITL with these options:
    - **"Approved — proceed with implementation"** → Continue to **PART 2**
-     in the same session. Update the plan marker status to `APPROVED`.
+     in the same session. Record the plan marker status as `APPROVED` in the
+     next comment you post — never edit the already-posted plan comment.
    - **"I have feedback"** → The user provides feedback as freeform text.
      Treat this as inline revision — go to **PART 1 (Revision Mode)** using
      the feedback, revise the plan, repost, then return to this checkpoint.

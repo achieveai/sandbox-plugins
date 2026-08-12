@@ -71,7 +71,8 @@ with implementation.*
 - **`v<N>`** — Version number, starting at `v1`. Incremented on each revision.
 - **`status`** — One of:
   - `PENDING_REVIEW` — Plan posted, awaiting human feedback
-  - `APPROVED` — Human approved (updated when execution begins)
+  - `APPROVED` — Human approved (carried on the next comment posted when
+    execution begins — never an edit to the already-posted plan comment)
   - `EXECUTING` — Implementation in progress
 - **`type`** (optional) — One of:
   - `RCA` — Root Cause Analysis for bugs. Uses the format in
