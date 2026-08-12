@@ -71,8 +71,10 @@ with implementation.*
 - **`v<N>`** — Version number, starting at `v1`. Incremented on each revision.
 - **`status`** — One of:
   - `PENDING_REVIEW` — Plan posted, awaiting human feedback
-  - `APPROVED` — Human approved (carried on the next comment posted when
-    execution begins — never an edit to the already-posted plan comment)
+  - `APPROVED` — Human approved. Recorded in the decision log (`decisions.md`),
+    never as a new BOT-PLAN marker and never as an edit to the already-posted
+    plan comment — that comment's marker remains the sole, latest BOT-PLAN
+    source for the parsing rule below
   - `EXECUTING` — Implementation in progress
 - **`type`** (optional) — One of:
   - `RCA` — Root Cause Analysis for bugs. Uses the format in

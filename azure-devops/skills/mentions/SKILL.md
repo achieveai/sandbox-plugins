@@ -21,7 +21,7 @@ Read the full conventions document:
 references/ado-mention-conventions.md
 ```
 
-Note: the path is relative to the ado plugin root (`ado/references/`).
+Note: the path is relative to the `azure-devops` plugin root (`azure-devops/references/`).
 
 ## Quick Summary
 
@@ -37,10 +37,10 @@ Note: the path is relative to the ado plugin root (`ado/references/`).
 ## When to Use
 
 Use this skill before:
-- Composing PR descriptions (`ado-publish-pr`)
-- Posting review comments or replies (`ado-babysit-pr`, `ado-pr-tender`)
-- Creating or updating work items (`ado-work-items`, `ado-draft-work-item`)
-- Posting comments to work items (`ado-work-on`)
+- Composing PR descriptions (`publish-pr`)
+- Posting review comments or replies (`babysit-pr`, `pr-tender`)
+- Creating or updating work items (`work-items`, `draft-work-item`)
+- Posting comments to work items (`work-on`)
 - Writing wiki content that references ADO artifacts
 
 ## Full URL Patterns (No Shorthand)

@@ -26,8 +26,8 @@ asking for user confirmation — fix, reply, self-review, build, commit, push.
 - **Ordinary mutations — just do them.** Invoking this workflow, or an explicit user request, authorizes the creates, updates, comments, commits, and pushes it performs by name. No extra gate is added on top. This NEVER bypasses an existing gate: confirmation prompts, mandatory previews, hard checkpoints, and `approvalSource` verifications stay exactly as written, and where a local rule is stricter, the local rule wins.
 - **Read-only discovery is not a mutation.** `ado-cli.js list --json`, `--help`, and any list/get/query method may be called freely at any time — no confirmation, even for methods this plugin does not otherwise name.
 - **Comments are append-only.** NEVER invoke `manageWorkItemComment` with `action: "update"` or `"delete"`, and never edit or delete a comment already posted on a work item or PR. To correct or supersede something, post a NEW comment. This limits comments only — a work item's own fields and state are still updated normally when the workflow or the user calls for it.
-- **Confirm the exceptional first** — name the action and the resource, and proceed only on an affirmative: destructive or irreversible methods (`mergePullRequest`, `runPipeline`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, overwrite-style `createOrUpdateWikiPage`), anything outside this workflow's stated scope, or a broad/bulk write across many items at once. Required only when the user did not ask for that action and no hard gate in this workflow already authorized it — once a checkpoint or `approvalSource` gate has passed, autonomous loops continue without further prompting.
-- **No PAT surface.** Never ask the user for a PAT, token, or credential file, and never pass `--pat`. Auth is `sandbox-auth:azure-devops` only. The CLI's stderr auth banner is an invariant: auth type `none`, PAT not set. If it ever reports a PAT or any other auth type, STOP — treat it as a credential leak and report it instead of continuing.
+- **Confirm the exceptional first** — name the action and the resource, and proceed only on an affirmative. The named destructive or irreversible methods (`mergePullRequest`, `runPipeline`, `deletePackageVersion`, `rotateSecrets`, `manageSecurityPolicies`, overwrite-style `createOrUpdateWikiPage`) always require a fresh, explicit confirmation, regardless of any gate already passed. For anything outside this workflow's stated scope, any mutating CLI method this plugin does not reference by name, or a broad/bulk write across many items at once, confirmation is required only when the user did not ask for that action and no hard gate in this workflow already authorized it — once a checkpoint or `approvalSource` gate has passed, autonomous loops continue without further prompting.
+- **No PAT surface.** Never ask the user for a PAT, token, or credential file, and never pass `--pat`. Auth is `sandbox-auth:azure-devops` only. On every successful call the CLI's stderr prints one exact line, `[Auth] Auth type: none, PAT: not set` — reading it is a separate, mandatory check, made in addition to the exit-code/stdout branching that already determined success. A non-zero exit still branches on exit code and stdout as usual and is not guaranteed to carry this banner at all. If a successful call ever reports a PAT or any other auth type, STOP and treat it as a credential leak instead of continuing.
 - **Never dump the environment.** No `env`, `printenv`, or `echo "$HTTP_PROXY"`. Proxy variables carry a per-sandbox credential — test presence (`[ -n "$HTTPS_PROXY" ]`), never print the value.
 - **Never paste raw payloads.** Summarize CLI output, request bodies, and build/test logs; never copy them wholesale into chat, ADO comments, or state files. Redact any `token`/`pat`/`password`/`secret`/`authorization` field before quoting it.
 - **Thread resolution** follows this plugin's existing review-thread rules — nothing in this block changes them.
@@ -40,7 +40,7 @@ You receive from the `azure-devops:babysit-pr` skill:
   failures, coverage gaps, review comments
   (`[Conflict]`, `[Build]`, `[Test]`, `[Coverage]`, `[Address]`, `[WontFix-NA]`,
   `[WontFix-Bug]`, `[Resolve]`)
-- **PR number** and **branch name**
+- **Repository name**, **PR number**, and **branch name**
 - **Target branch** (for merge conflict resolution)
 - **Build/test commands** (e.g., `dotnet build` / `dotnet test`)
 - **Previously addressed thread IDs** (skip these)
@@ -178,7 +178,7 @@ and passes it as part of the ADO context. Use it directly:
 **Step 2: Create the Work Item**
 
 Call `createWorkItem` with:
-- `type`: `"Task"` (default for deferred review findings)
+- `workItemType`: `"Task"` (default for deferred review findings)
 - `title`: Concise summary under 80 chars (e.g., "Fix systemic error handling
   gap in controllers")
 - `description`: Markdown body including:
@@ -192,7 +192,7 @@ Call `createWorkItem` with:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" createWorkItem --structured <<'ADOJSON'
-{ "type": "Task", "title": "<concise summary under 80 chars>", "description": "<markdown body: quoted reviewer comment, file/line, PR number/branch, why out of scope, suggested approach>", "areaPath": "<resolved area path, omit if fallback>", "additionalFields": { "Microsoft.VSTS.Common.Priority": 3 } }
+{ "workItemType": "Task", "title": "<concise summary under 80 chars>", "description": "<markdown body: quoted reviewer comment, file/line, PR number/branch, why out of scope, suggested approach>", "areaPath": "<resolved area path, omit if fallback>", "additionalFields": { "Microsoft.VSTS.Common.Priority": 3 } }
 ADOJSON
 ```
 
@@ -229,7 +229,7 @@ the appropriate status based on how they were handled:
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
-   { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "fixed" }
+   { "repository": "<repository name>", "pullRequestId": <PR number>, "threadId": <thread id>, "status": "fixed" }
 ADOJSON
    ```
 
@@ -238,7 +238,7 @@ ADOJSON
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
-   { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "wontFix" }
+   { "repository": "<repository name>", "pullRequestId": <PR number>, "threadId": <thread id>, "status": "wontFix" }
 ADOJSON
    ```
 
@@ -248,7 +248,7 @@ ADOJSON
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
-   { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "byDesign" }
+   { "repository": "<repository name>", "pullRequestId": <PR number>, "threadId": <thread id>, "status": "byDesign" }
 ADOJSON
    ```
 
@@ -257,7 +257,7 @@ ADOJSON
 
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
-   { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "closed" }
+   { "repository": "<repository name>", "pullRequestId": <PR number>, "threadId": <thread id>, "status": "closed" }
 ADOJSON
    ```
 

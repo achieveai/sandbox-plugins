@@ -13,7 +13,7 @@ import { execSync } from "node:child_process";
 import {
   resolveConfig, getDevIdentity, getCurrentSprint, querySprintWorkItems,
   fetchWorkItemChangedDate, fetchWorkItemFull, extractLinkedPrIds,
-  isActivePr, fetchPrContext,
+  isActivePr, fetchPrContext, rethrowIfAuthInvariant,
 } from "./ado-api.mjs";
 
 import { classifyWorkItem, lastHumanCommentTimestamp } from "./classify.mjs";
@@ -246,6 +246,10 @@ async function processWorkItem(wiId, config) {
       updatedState,
     };
   } catch (err) {
+    // An auth invariant violation is not an ordinary per-item failure — it must abort the scan,
+    // never be retried or folded into the error-cap/continue path below (see ado-api.mjs).
+    rethrowIfAuthInvariant(err);
+
     const errorCount = (saved?.errorCount ?? 0) + 1;
     const title = saved?.title ?? `WI #${wiId}`;
     const now = new Date().toISOString();
@@ -412,6 +416,10 @@ async function main() {
     const wiId = wiIds[i];
 
     if (r.status === "rejected") {
+      // processWorkItem already rethrows AuthInvariantError instead of catching it, so a rejection
+      // here can carry one straight out of Promise.allSettled. Abort the whole scan immediately —
+      // do not fold it into `errors` and continue, unlike an ordinary per-item rejection.
+      rethrowIfAuthInvariant(r.reason);
       errors.push({ workItemId: wiId, error: r.reason?.message ?? "Unknown" });
       continue;
     }

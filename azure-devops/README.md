@@ -50,7 +50,7 @@ Rules:
 2. JSON body via stdin only. Never `--input`, and never `--input -` (fails with `ENOENT` trying to open a file literally named `-`).
 3. Use a quoted heredoc (`<<'ADOJSON' ... ADOJSON`) — not `echo '...' |`, which breaks on apostrophes and does not neutralize `$`/backticks.
 4. `${CLAUDE_PLUGIN_ROOT}` is a Claude Code placeholder, not a shell variable — it is substituted before the shell runs. Keep it double-quoted. Never `export` it or derive it via `dirname "$0"`.
-5. Branch only on exit code and stdout. Non-empty stderr is not a failure — it always carries an auth banner and Node's DEP0169 deprecation warning, even on success.
+5. Branch success/failure only on exit code and stdout — non-empty stderr alone is never a failure signal. On success, stderr always carries an auth banner and Node's DEP0169 deprecation warning; a non-zero exit still branches the same way and may not carry either. That banner is a separate, mandatory read on every successful call, not exempted by this rule: it must say exactly `[Auth] Auth type: none, PAT: not set` (see `CLAUDE.md`'s `<mutation_privacy_policy>` block) — anything else is a credential leak, stop and report it.
 
 ## Authentication
 
@@ -92,7 +92,7 @@ Three tiers, enforced by instruction (no runtime adapter exists to enforce it in
 
 1. **Ordinary** — methods any ported file already references, plus anything the user explicitly asks for. Proceed normally. Read-only discovery (`list --json`, `--help`, list/get/query methods) is never a mutation and never needs confirmation. Ordinary mutation never bypasses a workflow's own confirmation prompt, preview, hard checkpoint, or `approvalSource` gate — the stricter local rule wins.
 2. **Forbidden** — `manageWorkItemComment` update/delete, and editing or deleting any already-posted work item or PR comment. Never invoke; post a new comment instead. Work item fields and state are still updatable.
-3. **Confirm first** — destructive methods (e.g. `mergePullRequest`), anything out of scope, or a broad/bulk write. Ask before invoking, unless the user requested it or a hard gate in the workflow already authorized it.
+3. **Confirm first** — named destructive methods (e.g. `mergePullRequest`) always require a fresh confirmation, even after a hard gate has passed. Anything out of scope, any mutating method this plugin does not reference by name, or a broad/bulk write need confirmation only when the user didn't request it and no hard gate in the workflow already authorized it.
 
 See `CLAUDE.md` for the canonical `<mutation_privacy_policy>` block, restated byte-identical in all nine mutating skills and agents.
 

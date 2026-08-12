@@ -272,9 +272,18 @@ Both checks are idempotent no-ops in a correctly configured sandbox.
   **The likeliest accidental-disclosure path in the design** — there is no adapter to redact for you.
 - **No secrets in transcripts.** Skills summarize; they never echo raw bodies or raw output wholesale.
   Redact any field named `token`/`pat`/`password`/`secret`/`authorization` before quoting it anywhere.
-- **The stderr auth banner is an invariant.** `ado-cli.js` prints `[Auth] Auth type: none, PAT: not set`
-  every run. Under this design it is *always* exactly that. Anything else means a PAT leaked — stop.
-  Either way it is CLI noise and must not surface in a user-facing error.
+- **The stderr auth banner is an invariant on success.** `ado-cli.js` prints
+  `[Auth] Auth type: none, PAT: not set` on every exit-0 call — auth initializes, and this line
+  prints, before any method runs. Under this design it is *always* exactly that on success. A
+  non-zero exit is not guaranteed to carry it (e.g. exit 4, missing env vars, fails before auth
+  initializes) — that case is out of scope for this invariant. Enforcement is selective, not
+  uniform: direct/shell CLI invocations stay instruction-only (`CLAUDE.md` rule 5, no adapter, no
+  runtime block), but `ado-api.mjs` — the one code-level transport (R9) — validates the banner on
+  every successful call and rejects with a distinct `AuthInvariantError` if it's ever missing or
+  wrong, rethrown ahead of ordinary fallback handling in every catch path in that module so it can
+  never be silently swallowed. Its message is fixed and generic — it never quotes the raw banner or
+  stderr — so a leaked credential still cannot reach a log line or a user-facing error through this
+  path.
 - **Append-only comments** — see [Mutation policy](#mutation-policy). A `CLAUDE.md` prohibition and a
   V6 review item, not a runtime block.
 
@@ -304,9 +313,10 @@ of a runtime guarantee for removing a whole layer of code. Recorded in
   (cross-checked against `method-catalog.md`). A method no shipped skill uses is exceptional by
   definition, even if it looks benign.
 - **Tier 1 is a definition, not a hand-maintained list.** It *is* the referenced set. V3 checks that
-  the `CLAUDE.md` list equals what the files reference, so it cannot drift — either direction is a
-  release-time finding. Enumeration + two encoded corrections:
-  [Appendix A](#appendix-a--tier-1-method-inventory).
+  Appendix A's inventory equals what the files reference, so it cannot drift — either direction is a
+  release-time finding. `CLAUDE.md` carries Tier 1's behavioural definition inside the canonical
+  `<mutation_privacy_policy>` block (bullet 1), not an enumeration; the enumeration, plus two encoded
+  corrections, lives in [Appendix A](#appendix-a--tier-1-method-inventory).
 - Tier 2's method name appears in no ported file except as the subject of the prohibition, so V3 and
   V6 both surface any reintroduction.
 - Skills that already confirm before creating/updating (`work-items`' "always confirm
@@ -578,7 +588,7 @@ credential-free**, so all can run in ordinary CI or by hand. Detail:
 |---|---|
 | **V1 — Plugin validates** | `claude plugin validate ./azure-devops` passes. Manifest parses; every frontmatter block well-formed with `name` matching the containing directory (skills) or filename basename (agents). No component name contains `azure-devops` or `ado` (D4/R1). No `model` field expected (R12). |
 | **V2 — Bundled CLI intact** | Against the exact shipped `ado-cli.js`: bare usage exits `1` by design (usage/error text, no method given); `list --json`, `docs --out <tmp>`, and `help <method>` for a sample all exit `0` with no env vars and no network. `provenance.json` size + hash match. `method-catalog.md` byte-identical to a fresh regeneration, so it cannot silently drift. |
-| **V3 — Method refs + Tier 1 resolve** | Every bare method name in every ported file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier 1 list in `CLAUDE.md` equals the referenced set. |
+| **V3 — Method refs + Tier 1 resolve** | Every bare method name in every ported file matches an entry in a fresh `list --json`. `searchWorkItems` (→ `listWorkItems`, R8) and `getPullRequestById` (→ `getPullRequest`) corrected, plus anything else this finds. The Tier-1 inventory in Appendix A equals the referenced set; `CLAUDE.md` carries the behavioural definition, not an enumeration. |
 | **V4 — Self-containment + naming** | Zero hits under `azure-devops/` for `ado:`, `development:`, `gh:`, `code-reviewer:`, `debugging:` — confirming R6 removed every external dependency, not just the obvious ones. Zero hits for `azure-devops-` in any component name, path, or `skills:` entry. Colon-free `ado-` grep clean outside the four allowed filenames. |
 | **V5 — Privacy scan** | No PAT surface, no environment disclosure. Two greps, with a narrow, hash-gated exception for the `<mutation_privacy_policy>` block's own prohibition text — see Appendix C and V6(b). |
 | **V6 — Port fidelity review** | The human read no automation can replace: every ported file still does what its source did. Plus two required sub-checks (documented commands, not yet a committed test harness): (a) every canonical-invocation heredoc terminates at column 0 and executes clean, (b) all 10 mutation-policy occurrences (`CLAUDE.md`'s canonical copy + 9 skill/agent restatements) are present and hash-identical. Done last, against the finished tree. |

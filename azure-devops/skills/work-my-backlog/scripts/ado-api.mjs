@@ -20,6 +20,36 @@ const ADO_CLI_PATH = path.resolve(
   "..", "..", "..", "..", "scripts", "ado-cli.js"
 );
 
+// The CLI's one enforceable auth invariant (mutation_privacy_policy bullet 5): auth
+// initializes, and this exact line prints to stderr, before any method runs — guaranteed
+// present on every exit-0 call. A non-zero exit is not guaranteed to carry it (e.g. exit 4,
+// missing env vars, fails before auth initializes), which is fine — only the success path is
+// validated below. It never carries a credential value (auth type is a mode name —
+// "none"/"pat"/"entra"/"azcli"/"interactive" — not a token). Matched, not required to be the
+// *whole* stderr contents — stderr also always carries Node's DEP0169 warning, which is not a
+// failure signal and is never inspected here.
+const AUTH_BANNER = /\[Auth\] Auth type: (\S+), PAT: (set|not set)/;
+
+// Distinct from ordinary transport/exit-code errors so every fallback path below can single
+// it out and rethrow instead of silently falling back — an auth leak must never be treated as
+// just another failed call. The message is a fixed, generic string: it never echoes the raw
+// banner or stderr, so nothing credential-adjacent can reach a log line through this path.
+export class AuthInvariantError extends Error {
+  constructor(method) {
+    super(`ado-cli.js ${method}: auth invariant violated on a successful call (redacted — see AUTH_BANNER in ado-api.mjs)`);
+    this.name = "AuthInvariantError";
+  }
+}
+
+// Single choke point used by every catch below (and by scan.mjs's per-item and per-scan catches)
+// that would otherwise treat "the call failed" and "the call succeeded but leaked a credential"
+// the same way. Non-auth errors fall through untouched so ordinary fallback behavior (return
+// null/[]/false, try the next thing, count toward a retry/error cap) is unchanged. Exported so
+// callers outside this module reuse this exact check instead of duplicating an `instanceof`.
+export function rethrowIfAuthInvariant(err) {
+  if (err instanceof AuthInvariantError) throw err;
+}
+
 // The CLI reads AZURE_DEVOPS_ORG_URL / AZURE_DEVOPS_PROJECT from its own environment and
 // from nothing else: `invocationConfig` consults only those two variables before
 // `fail(…, 4)`, and `parseArgs` exposes no --org/--project flag, so no stdin parameter
@@ -67,7 +97,9 @@ function callAdoCli(method, params, config) {
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => { stdout += d; });
-    child.stderr.on("data", (d) => { stderr += d; }); // captured for diagnostics only — never treated as failure
+    // Buffered for diagnostics and for the auth-banner check below — never treated as a
+    // failure signal merely for being non-empty (see `close` handler).
+    child.stderr.on("data", (d) => { stderr += d; });
 
     // Spawn failures (e.g. ENOENT when `node` is not on PATH) emit `error` and never
     // emit `close`. Without this handler the promise would hang forever and the
@@ -78,6 +110,14 @@ function callAdoCli(method, params, config) {
 
     child.on("close", (code) => {
       if (code === 0) {
+        // Fail closed if the success path didn't report the expected auth invariant —
+        // this is the only stderr content ever branched on; ordinary non-empty stderr
+        // (e.g. the DEP0169 warning) is not inspected and is not a failure.
+        const banner = stderr.match(AUTH_BANNER);
+        if (!banner || banner[1] !== "none" || banner[2] !== "not set") {
+          settle(reject, new AuthInvariantError(method));
+          return;
+        }
         let parsed;
         try {
           parsed = JSON.parse(stdout);
@@ -185,6 +225,7 @@ async function fetchCurrentIteration(teamParams, config) {
   try {
     return asIteration(await callAdoCli("getCurrentSprint", teamParams, config));
   } catch (err) {
+    rethrowIfAuthInvariant(err);
     // A non-zero exit here (bad team, config, auth) must not abort the whole
     // resolution chain — the source wrapped every attempt in try/catch too.
     console.error(`[API] getCurrentSprint failed: ${err.message}`);
@@ -198,6 +239,7 @@ async function fetchLatestIteration(teamParams, config) {
     const list = Array.isArray(all) ? all : [];
     return list.length > 0 ? asIteration(list[list.length - 1]) : null;
   } catch (err) {
+    rethrowIfAuthInvariant(err);
     console.error(`[API] getSprints failed: ${err.message}`);
     return null;
   }
@@ -231,7 +273,10 @@ export async function getCurrentSprint(orgUrl, project, team) {
         sprint = await fetchCurrentIteration(discovered, config);
         if (!sprint) sprint = await fetchLatestIteration(discovered, config);
       }
-    } catch { /* ignore */ }
+    } catch (err) {
+      rethrowIfAuthInvariant(err);
+      /* ignore */
+    }
   }
 
   if (!sprint) {
@@ -392,7 +437,8 @@ export async function isActivePr(orgUrl, project, repository, prId) {
   try {
     const pr = await fetchPrDetails(orgUrl, project, repository, prId);
     return pr.status === 1;
-  } catch {
+  } catch (err) {
+    rethrowIfAuthInvariant(err);
     return false;
   }
 }
@@ -457,7 +503,8 @@ export async function fetchBuildStatus(orgUrl, project, sourceBranch, repository
       top: 5,
       queryOrder: "startTimeDescending",
     }, { orgUrl, project });
-  } catch {
+  } catch (err) {
+    rethrowIfAuthInvariant(err);
     return [];
   }
 
@@ -521,6 +568,7 @@ async function fetchBuildFailureLogs(orgUrl, project, buildId) {
     const lines = logContent?.lines || [];
     return lines.length > 0 ? lines.join("\n") : null;
   } catch (err) {
+    rethrowIfAuthInvariant(err);
     console.error(`[API] Failed to fetch build logs for build ${buildId}:`, err.message);
     return null;
   }
