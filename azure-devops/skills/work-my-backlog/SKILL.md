@@ -1,7 +1,7 @@
 ---
 name: work-my-backlog
 description: >
-  Internal helper. Load only when explicitly named by another skill or agent.
+  Scans a sprint backlog assigned to the caller, classifies each item's state (planning, awaiting approval, ready to implement, or PR review), and dispatches autonomous workflows for the items that have advanced. Invoke with `/work-my-backlog` or via `/loop 15m /work-my-backlog` to run periodically as a daemon. Triggers on "work my backlog", "process sprint", "handle assigned items".
 user-invocable: true
 disable-model-invocation: false
 ---
