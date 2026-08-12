@@ -98,4 +98,3 @@ Do NOT resolve comment threads — let the reviewer resolve them.
   `addWorkItemComment`
 - **Bash**: git operations (`diff`, `add`, `commit`, `push`)
 - **File tools**: reading and editing for code changes
-</content>

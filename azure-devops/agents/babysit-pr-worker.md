@@ -330,4 +330,3 @@ After pushing (or if nothing needed fixing), report back to the skill:
 - **Bash**: git operations (`diff`, `add`, `commit`, `push`, `merge`, `fetch`),
   build/test commands
 - **File tools**: Read, Edit, Write, Glob, Grep for code changes
-</content>

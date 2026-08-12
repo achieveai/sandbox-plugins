@@ -54,4 +54,3 @@ response. Determine the developer name from the PR author, work item assignee,
 or git config (`git config user.name`).
 </bot_identity>
 - Suggest process improvements based on observed patterns
-</content>
