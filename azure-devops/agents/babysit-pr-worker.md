@@ -217,7 +217,7 @@ the appropriate status based on how they were handled:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
    { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "fixed" }
-   ADOJSON
+ADOJSON
    ```
 
 2. **Won't Fix** threads (`[WontFix-NA]`, `[WontFix-Bug]` todos):
@@ -226,7 +226,7 @@ the appropriate status based on how they were handled:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
    { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "wontFix" }
-   ADOJSON
+ADOJSON
    ```
 
 3. **By Design** threads (comments declined because the behavior is intentional,
@@ -236,7 +236,7 @@ the appropriate status based on how they were handled:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
    { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "byDesign" }
-   ADOJSON
+ADOJSON
    ```
 
 4. **Informational/bot summary** threads (no action needed):
@@ -245,7 +245,7 @@ the appropriate status based on how they were handled:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" updatePullRequestThread --structured <<'ADOJSON'
    { "pullRequestId": <PR number>, "threadId": <thread id>, "status": "closed" }
-   ADOJSON
+ADOJSON
    ```
 
 Do NOT resolve threads that:

@@ -28,7 +28,7 @@ to merge.
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listPullRequests --structured <<'ADOJSON'
    { "sourceRefName": "refs/heads/<current-branch>", "status": "active" }
-   ADOJSON
+ADOJSON
    ```
 2. **Check status** -- Use `getPullRequest` to get merge status, reviewer votes,
    and CI status:
@@ -36,7 +36,7 @@ to merge.
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getPullRequest --structured <<'ADOJSON'
    { "pullRequestId": <PR number> }
-   ADOJSON
+ADOJSON
    ```
 3. **Read feedback** -- Use `getPullRequestComments` to fetch active (unresolved)
    threads:
@@ -44,7 +44,7 @@ to merge.
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getPullRequestComments --structured <<'ADOJSON'
    { "pullRequestId": <PR number> }
-   ADOJSON
+ADOJSON
    ```
    For each thread, understand what the reviewer wants.
 4. **Address feedback** -- For each active thread:
