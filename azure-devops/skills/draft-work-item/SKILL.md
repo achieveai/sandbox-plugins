@@ -319,6 +319,30 @@ offer a different sprint (`getSprints`) or "Backlog — no sprint". Priority
 maps to `Microsoft.VSTS.Common.Priority` numeric: Critical=1, High=2,
 Medium=3, Low=4.
 
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getTeams --structured <<'ADOJSON'
+{ "filter": "<keyword>" }
+ADOJSON
+```
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getWorkItemTypeFields --structured <<'ADOJSON'
+{ "processId": "<process-id>", "witRefName": "<work-item-type-ref-name>" }
+ADOJSON
+```
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getCurrentSprint --structured <<'ADOJSON'
+{ "teamId": "<team-id>" }
+ADOJSON
+```
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getSprints --structured <<'ADOJSON'
+{ "teamId": "<team-id>" }
+ADOJSON
+```
+
 If the user is unsure, use the project's root/default area path.
 
 ### 3.3 Duplicate Check
@@ -337,6 +361,12 @@ as a duplicate.
 ### 3.4 Assignment (optional)
 
 "Assign to me" / "Pick a team member" (`getTeamMembers`) / leave unassigned.
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getTeamMembers --structured <<'ADOJSON'
+{ "teamId": "<team-id>" }
+ADOJSON
+```
 
 ### 3.5 Preview — Mandatory Confirmation
 
