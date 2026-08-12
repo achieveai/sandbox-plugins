@@ -58,14 +58,18 @@ Propose a type from the raw input:
 
 If the type isn't obvious, show the options and ask — do not guess.
 
-Type source: resolve the process ID once via `getProcesses`, then call
-`getWorkItemTypes` with it; map to **Bug / User Story (or PBI) / Task**:
+Type source: resolve the process ID once via `getProjectDetails`
+(`capabilities.processTemplate.templateTypeId`), then call `getWorkItemTypes`
+with it; map to **Bug / User Story (or PBI) / Task**:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getProcesses --structured <<'ADOJSON'
-{}
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getProjectDetails --structured <<'ADOJSON'
+{ "projectId": "<project>", "includeCapabilities": true }
 ADOJSON
 ```
+
+Read `<process-id>` from the response's
+`capabilities.processTemplate.templateTypeId`.
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" getWorkItemTypes --structured <<'ADOJSON'
@@ -93,11 +97,11 @@ directly (no external drafting skill or review agent is delegated to):
    existing work for overlap via `listWorkItems` (WIQL) for related/duplicate
    efforts already tracked:
 
-   ```bash
-   node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-   { "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<keyword>'" }
-   ADOJSON
-   ```
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
+{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<keyword>'" }
+ADOJSON
+```
 
    Use `WebSearch` only when the requirement leans on external/unfamiliar
    tech, standards, or APIs. Summarize what you learned and where the
@@ -324,7 +328,7 @@ See also
 Resolve **Area Path + Team**: call `getTeams`, match the description to a team
 or ask, then derive area path `<Project>\<Team>` (adapt via
 `getWorkItemTypeFields` — using the `<process-id>` already resolved via
-`getProcesses` in Phase 1 — for `System.AreaPath`). Propose `getCurrentSprint`;
+`getProjectDetails` in Phase 1 — for `System.AreaPath`). Propose `getCurrentSprint`;
 offer a different sprint (`getSprints`) or "Backlog — no sprint". Priority
 maps to `Microsoft.VSTS.Common.Priority` numeric: Critical=1, High=2,
 Medium=3, Low=4.
@@ -361,7 +365,7 @@ Call `listWorkItems` with the proposed title:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listWorkItems --structured <<'ADOJSON'
-{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<proposed title>'" }
+{ "query": "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = @project AND [System.Title] CONTAINS '<proposed title>'", "days": 30, "top": 25 }
 ADOJSON
 ```
 

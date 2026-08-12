@@ -262,11 +262,11 @@ tool categories even when the work item seems simple.
   hardcoded call here.
 - **Recent PRs**: `listPullRequests` — recently merged PRs in the same area:
 
-  ```bash
-  node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listPullRequests --structured <<'ADOJSON'
-  { "repository": "<repository>", "status": "completed", "top": 20 }
-  ADOJSON
-  ```
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/ado-cli.js" listPullRequests --structured <<'ADOJSON'
+{ "repository": "<repository>", "status": "completed", "top": 20 }
+ADOJSON
+```
 
 **Log all research findings** to the decision log — what was found, what was
 searched but not found, and how findings influenced the chosen approach.
@@ -618,6 +618,11 @@ STOP.
 - **Phase 2.3 returns blocked** (build/test failures after its 3-attempt cap,
   or a drift/cheating signal) → post a blocker comment to the work item with
   the diagnostics, revert state to `Active` when possible, STOP.
+- **`createLink` fails after the child `createWorkItem` succeeded** (Phase
+  2.3 decomposition) → the child work item now exists but is unlinked
+  (orphaned) — do not retry blindly and do not treat decomposition as done.
+  STOP and report the orphaned child's ID to the user/decision log so it can
+  be linked or deleted manually.
 - **Worktree creation fails** → inform user locally (environment issue).
   Do not post to the work item.
 - **PR creation fails** → check if a PR already exists for this branch. If so,
