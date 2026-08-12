@@ -173,7 +173,10 @@ mandatory for merge. When processing comments:
 
 ### Rules
 
-- **Never close or resolve threads yourself** — only the reviewer closes threads
+- **Threads are closed by the reviewer, or by the autonomous babysit worker once
+  it has applied and verified the requested change.** Interactive/assistive
+  flows never resolve threads on the developer's behalf. See the
+  [Review Thread State Machine](review-thread-state-machine.md).
 - **Always provide evidence** — "Fixed" must point to actual code changes;
   "Won't Fix" must provide technical reasoning
 - **Use the standard reply format** — always prefix with `[<dev name>'s bot]`
