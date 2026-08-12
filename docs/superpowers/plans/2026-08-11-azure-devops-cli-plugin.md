@@ -687,6 +687,31 @@ Expected: 0 matches.
 ```
 Expected: equal to the phase/section header count in the source `development/skills/work-on/SKILL.md` (same command, run against the source file, to diff counts — they must match exactly, confirming no phase was merged/split/dropped).
 
+> **Note for integration (fix round 1, this branch only):** the command above is
+> fence-blind — it counts any line starting with `#` even inside a fenced code
+> block (e.g. a template the skill instructs the agent to write into
+> `decisions.md`), so a heading-like example line inside a code fence is
+> indistinguishable from a real phase header. It happened to catch a real
+> defect once (headings flattened to satisfy this exact count) and could just
+> as easily reward the same workaround again. Prefer a fence-aware count when
+> this gate is centralized for Task 16/17, e.g. (PowerShell, strips fenced
+> ranges before counting):
+> ```powershell
+> $lines = Get-Content "...\skills\work-on\SKILL.md"
+> $inFence = $false
+> ($lines | Where-Object {
+>   if ($_ -match '^```') { $inFence = -not $inFence; return $false }
+>   -not $inFence -and $_ -match '^#|^##|^###'
+> }).Count
+> ```
+> Verified fence-aware for this branch: 35 = 35 (headings restored under
+> `### Phase 2.3`; the fenced Purpose & Consumption template is indented 3
+> spaces, matching `development/skills/implement/SKILL.md`'s own convention,
+> so its `##`/`###` lines don't start at column 0 and are excluded from either
+> count form). Not applied as a blanket edit to Step 8 above since other
+> ported files may rely on the simpler command as-is; flagging for Task 16/17
+> to decide whether to centralize the fence-aware version.
+
 ```powershell
 Get-ChildItem "...\skills\work-on\reference\" -Filter "*.md" | Measure-Object
 ```

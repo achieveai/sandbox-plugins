@@ -210,7 +210,7 @@ implementation plan via a **Plan subagent**.
 Perform this research and approach-selection **directly, using your own
 reasoning and standard tools** (Read/Grep/Glob/git log/WebSearch) — no external
 design skill is delegated to, and no separate design-review-gate sub-agent is
-dispatched (that step is simplified out of this inlined version). Work through:
+dispatched. Work through:
 
 1. Extract requirements and note ambiguities (→ assumptions).
 2. Reconnoiter the codebase for existing patterns, files to change, and impact —
@@ -473,24 +473,24 @@ anything, write down what this work is *for* and how its output will be
 *consumed*, as a section in the decision log (`decisions.md`, under the Part 2
 heading):
 
-```markdown
-Purpose & Consumption — <work item title>
+   ```markdown
+   ## Purpose & Consumption — <work item title>
 
-**Why this exists (purpose)**
-- Problem / outcome: <the user/business problem this solves>
-- Definition of done: <the acceptance criteria, restated concretely>
+   ### Why this exists (purpose)
+   - Problem / outcome: <the user/business problem this solves>
+   - Definition of done: <the acceptance criteria, restated concretely>
 
-**How it will be consumed**
-- Callers / consumers: <who calls this — APIs, UI, downstream services, jobs>
-- Contracts & invariants: <inputs/outputs, DTO/schema shapes, behaviors callers rely on>
-- Surfaces touched: <public API, persisted data, events/queues, UI>
+   ### How it will be consumed
+   - Callers / consumers: <who calls this — APIs, UI, downstream services, jobs>
+   - Contracts & invariants: <inputs/outputs, DTO/schema shapes, behaviors callers rely on>
+   - Surfaces touched: <public API, persisted data, events/queues, UI>
 
-**Constraints**
-- <compatibility, performance, security, conventions to honor>
+   ### Constraints
+   - <compatibility, performance, security, conventions to honor>
 
-**Out of scope (do NOT build)**
-- <explicit non-goals — guards against scope creep>
-```
+   ### Out of scope (do NOT build)
+   - <explicit non-goals — guards against scope creep>
+   ```
 
 Reference this brief when decomposing, when reviewing each task, and at
 verification below — if a task or finding doesn't serve the purpose or a
