@@ -67,6 +67,15 @@
         "task-memory",
         "agentic-workflows"
       ]
+    },
+    {
+      "name": "azure-devops",
+      "source": "./azure-devops",
+      "description": "CLI-native Azure DevOps workflows — work items, PR publish/babysit/tend, and backlog triage — via a bundled ado-cli.js executed as a child process. No MCP server, no PAT interface; authenticates through sandbox-auth:azure-devops.",
+      "version": "1.0.0",
+      "category": "development",
+      "tags": ["azure-devops", "work-items", "pull-requests", "code-review", "backlog"],
+      "keywords": ["ado-cli", "azure-devops-work-items", "azure-devops-pr", "backlog-triage", "code-review-response"]
     }
   ]
 }

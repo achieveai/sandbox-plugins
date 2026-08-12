@@ -44,12 +44,19 @@ portable Python probe engine, plus thin per-service skills (GitHub, Azure DevOps
 generic connect) that reference the shared egress-auth mechanics with service-specific probe
 URLs/scopes.
 
+### azure-devops (v1.0.0)
+
+CLI-native Azure DevOps workflows: work items, PR publish/babysit/tend, review-thread response,
+and backlog triage. Every operation runs through a bundled `ado-cli.js`, spawned as a child
+process — no MCP server, no PAT interface. Authenticates via `sandbox-auth:azure-devops`.
+
 ## Extensibility
 
 **Sandbox is the expected runtime context for these plugins, not a naming taxonomy.** This
 marketplace is expected to grow with plugins named for what they do — for example `email`,
-`collaboration`, `azure-devops` — that happen to run inside a sandboxed agent session. Running in
-a sandbox is an execution-environment fact, not an identity: a future plugin is never renamed or
+`collaboration` — that happen to run inside a sandboxed agent session. `azure-devops` is one such
+plugin, already present above, not merely hypothetical. Running in a sandbox is an
+execution-environment fact, not an identity: a future plugin is never renamed or
 prefixed `sandbox-` merely because it is expected to execute in one. The `sandbox` name is reserved
 for the workspace/runtime plugin and `sandbox-auth` for the egress-authentication plugin; new,
 domain-specific functionality belongs in its own, separately named plugin rather than being folded
@@ -63,6 +70,7 @@ sandbox-plugins/
 │   └── marketplace.json   # Marketplace catalog
 ├── sandbox/                # Workspace/runtime plugin
 ├── sandbox-auth/           # Egress-authentication plugin
+├── azure-devops/           # CLI-native Azure DevOps plugin
 ├── scratchpad/             # Research and development notes
 └── README.md                # This file
 ```
