@@ -7,8 +7,9 @@
       "id": "review-setup",
       "entryPoints": {
         "setup": "skills/review-setup/scripts/review_setup.py",
-        "reset": "skills/review-setup/scripts/review_reset.py",
-        "status": "skills/review-setup/scripts/review_setup.py --status"
+        "status": "skills/review-setup/scripts/review_setup.py --status",
+        "warm": "skills/review-setup/scripts/review_setup.py --warm",
+        "reset": "skills/review-setup/scripts/review_reset.py"
       },
       "ioSchemaVersion": 1,
       "requiredCapabilities": ["python3>=3.10", "git", "curl", "posix-flock"]

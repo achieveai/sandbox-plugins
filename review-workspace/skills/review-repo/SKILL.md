@@ -17,13 +17,35 @@ One stdlib-only script, safe on Windows and POSIX (no `fcntl`, no hard links):
 
 ```bash
 python3 <plugin-root>/skills/review-repo/scripts/review_repo.py plan      --root <review-repo-root> [--repo <name>=<git-url>]...
-python3 <plugin-root>/skills/review-repo/scripts/review_repo.py bootstrap --root <review-repo-root> [--repo <name>=<git-url>]... [--dry-run]
+python3 <plugin-root>/skills/review-repo/scripts/review_repo.py bootstrap --root <review-repo-root> [--repo <name>=<git-url>]... [--skill-bundle <plugin>=<path>] [--dry-run]
 python3 <plugin-root>/skills/review-repo/scripts/review_repo.py check     --root <review-repo-root>
-python3 <plugin-root>/skills/review-repo/scripts/review_repo.py update    --root <review-repo-root>
+python3 <plugin-root>/skills/review-repo/scripts/review_repo.py update    --root <review-repo-root> [--skill-bundle <plugin>=<path>]
 ```
 
 Add `--json` to get the result envelope (`schemaVersion`, `status`, `runId`, `operation`,
-`artifacts`, `effects`) defined in the plugin's `bundle.json`. `--root` is always required.
+`artifacts`, `effects`) defined in the plugin's `bundle.json`, printed as a single line.
+`--root` is always required.
+
+`--run-id <id>` is optional: supply it and the envelope's `runId` echoes it verbatim, so a
+dispatcher can correlate the result with its invocation. Without it the script generates
+its own. The grammar is `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`.
+
+## Selecting a skill bundle
+
+`--skill-bundle <plugin>=<relative-path>` records, in the manifest, which skill bundle the
+review repository itself supplies:
+
+```json
+"skillBundle": {"plugin": "review-workspace", "path": ".agents/skills/review-workspace"}
+```
+
+The path must be a plain relative POSIX path naming a directory under `.agents/skills` or
+`.claude/skills`. Accepted on `bootstrap` and `update` only, at most once. An `update` that
+does not name a bundle preserves the recorded selection.
+
+**A bundle directory that is merely present never selects anything.** Only this manifest key
+does, so a stray `.agents/skills/<plugin>/` cannot silently take over a review. The key may
+be recorded before the bundle is committed; `check` is what reports the gap.
 
 ## Owned layout
 
@@ -54,7 +76,9 @@ is preserved and ignored by `check`.
 - **check**: compare the manifest's owned files and hashes with disk.
   Missing owned entries are reported as `upgrade_needed`; modified owned files as
   `conflict` ("local edit — refusing to overwrite"); unknown files are ignored.
-  Exit `0` clean, `2` upgrade needed, `3` conflicts.
+  A recorded `skillBundle` whose path holds no `bundle.json` is reported as
+  `skill_bundle_missing` and blocks.
+  Exit `0` clean, `2` upgrade needed, `3` conflicts or a missing selected bundle.
 - **update**: apply only the missing owned entries. Refuses with exit `3` when `check`
   reports conflicts and changes nothing. Before writing, journals the previous manifest
   and per-file hashes to `.review-workspace/rollback-<timestamp>.json` (`status:

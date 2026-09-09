@@ -15,6 +15,8 @@ from review_common import (AdoClient, ReviewError, ReviewState, SourcePool, atom
                            discover_root, ensure_repository, file_hash, git_status, parse_ado_url,
                            preflight, read_submodules, repo_slug, run_git, run_git_read, safe_path, utc_now,
                            validate_sha, worktree_rows, write_new_json, write_new_text)
+import review_envelope
+from review_provider import get_provider
 
 
 def _has_commit(source: Path, sha: str) -> bool:
@@ -914,8 +916,8 @@ def _reserve_pool_run(
 
 def setup_run(root: Path, pr_number: int, *, slot: int | None = None, org: str | None = None,
               iteration: int | None = None, max_depth: int = 1000000, max_work_items: int = 2000,
-              max_commits: int = 500, client=None) -> dict:
-    from review_context import resolve_pr
+              max_commits: int = 500, client=None, provider=None) -> dict:
+    provider = provider if provider is not None else get_provider("ado")
     if pr_number < 1 or max_depth < 1 or max_work_items < 1 or max_commits < 1:
         raise ReviewError("PR number and resource budgets must be positive.")
     modules = read_submodules(root)
@@ -923,13 +925,13 @@ def setup_run(root: Path, pr_number: int, *, slot: int | None = None, org: str |
     if client is None:
         if org:
             org_url = org if org.startswith("https://") else f"https://dev.azure.com/{org}"
-            client = AdoClient(org_url)
+            client = provider.make_client(org_url)
         elif len(organizations) == 1:
-            client = AdoClient(organizations[0])
+            client = provider.make_client(organizations[0])
         else:
             raise ReviewError("More than one ADO organization is configured; supply --org.")
-    snapshot = resolve_pr(client, pr_number, iteration)
-    module = select_module(client, snapshot, modules)
+    snapshot = provider.resolve_pr(client, pr_number, iteration)
+    module = provider.select_module(client, snapshot, modules)
     _exact_snapshot_shas(snapshot, require_base=False)
     state = ReviewState(root)
     with state.lock():
@@ -970,7 +972,7 @@ def setup_run(root: Path, pr_number: int, *, slot: int | None = None, org: str |
         source, base = prepare_source(state, manifest, max_depth=max_depth)
         report = _collect(client, snapshot, source, base, max_depth=max_depth,
                           max_work_items=max_work_items, max_commits=max_commits)
-        current = resolve_pr(client, pr_number, iteration)
+        current = provider.resolve_pr(client, pr_number, iteration)
         stale = current["snapshot_fingerprint"] != snapshot["snapshot_fingerprint"]
         report["stale"] = stale
         if stale:
@@ -978,6 +980,105 @@ def setup_run(root: Path, pr_number: int, *, slot: int | None = None, org: str |
             report["complete"] = False
         publish_report(state, manifest, report)
         return manifest
+
+
+def _setup_details(root: Path, manifest: dict) -> dict:
+    """The structured fields the daemon needs to mount and address a prepared slot."""
+    slot_path = manifest["slot_path"]
+    return {
+        "head_sha": manifest["snapshot"]["head_sha"],
+        "base_sha": manifest.get("base_sha", ""),
+        "slot_path": slot_path,
+        "source_path": f"{slot_path}/{manifest['submodule']['path']}",
+        "branch": manifest["branch"],
+        "pr_dir": manifest.get("pr_dir", ""),
+    }
+
+
+def _record_setup(env, root: Path, manifest: dict, code: int) -> str:
+    """Map a completed PR setup onto the envelope. Exit 2 is a faithful `completed` whose
+    `partial_context` effect tells the caller the required scope was not satisfied."""
+    env.effect("script_run_id", detail=manifest.get("run_id", ""))
+    slot_path = manifest["slot_path"]
+    env.artifact(slot_path, "worktree")
+    hashes = manifest.get("artifacts", {})
+    for relative in manifest.get("report_paths", []):
+        env.artifact(f"{slot_path}/{relative}", "report", hashes.get(relative))
+    if code == 3:
+        env.effect("stale_snapshot", path=slot_path, **_setup_details(root, manifest))
+        return "blocked"
+    env.effect(
+        "setup_complete" if code == 0 else "partial_context",
+        path=slot_path,
+        **_setup_details(root, manifest),
+    )
+    return "completed"
+
+
+def _record_rows(env, rows: list[dict]) -> None:
+    for row in rows:
+        env.effect("slot_status", path=row.get("slot_path", ""), **row)
+
+
+def _error_status(env, exc: ReviewError) -> str:
+    """Faithful exit-code -> status mapping for a refusal."""
+    if str(exc) == review_envelope.LOCK_CONTENTION_MESSAGE:
+        env.effect("lock_contention", detail=str(exc))
+        return "retryable"
+    if exc.code == 3:
+        env.effect("stale_snapshot", detail=str(exc))
+        return "blocked"
+    env.effect(exc.effect_type, detail=exc.effect_detail or str(exc), message=str(exc))
+    return "failed"
+
+
+def _dispatch(args, env, show) -> tuple[int, str]:
+    """Run the selected mode, filling the envelope. Returns (exit code, status)."""
+    provider = get_provider(args.provider)
+    provider.ensure_available()
+    if args.preflight:
+        tools = preflight()
+        show(json.dumps(tools, indent=2))
+        env.effect("preflight", detail=" ".join(f"{k}={v}" for k, v in sorted(tools.items())), **tools)
+        return 0, "no_op"
+    root = discover_root(args.root)
+    if args.status:
+        rows = status_run(root)
+        show(json.dumps(rows, indent=2))
+        _record_rows(env, rows)
+        return 0, "no_op"
+    if args.warm or args.warm_all:
+        if args.warm:
+            rows = [warm_run(root, args.repo, args.slot, dry_run=args.dry_run)]
+            show(json.dumps(rows[0], indent=2))
+        else:
+            rows = warm_all_run(root, dry_run=args.dry_run)
+            show(json.dumps(rows, indent=2))
+        _record_rows(env, rows)
+        blocked = any(row["status"] in ("occupied", "blocked", "partial") for row in rows)
+        if blocked:
+            return 2, "blocked"
+        return 0, ("no_op" if args.dry_run else "completed")
+    preflight()
+    manifest = setup_run(root, args.pr_number, slot=args.slot, org=args.org, iteration=args.iteration,
+                         max_depth=args.max_depth, max_work_items=args.max_work_items,
+                         max_commits=args.max_commits, provider=provider)
+    slot_id = manifest.get("slot_id", f"legacy-{manifest['slot']}")
+    show(f"PR: {manifest['key']}\nSlot: {slot_id}\nBranch: {manifest['branch']}")
+    show(f"Worktree: {root / manifest['slot_path']}\nSource: {manifest['submodule']['path']}")
+    show(f"Head: {manifest['snapshot']['head_sha']}\nBase: {manifest.get('base_sha', 'unavailable')}")
+    for relative in manifest.get("report_paths", []):
+        show(f"Artifact: {root / manifest['slot_path'] / relative}")
+    show(f"Complete: {manifest.get('complete', False)}; stale: {manifest.get('stale', False)}")
+    script = Path(__file__).with_name("review_reset.py")
+    if manifest.get("schema_version") == 2:
+        selector = f"--slot {slot_id}"
+    else:
+        selector = f"--legacy-slot {manifest['slot']}"
+    show(f"Archive: python3 {script} {selector} --mode archive")
+    show(f"Discard: python3 {script} {selector} --mode discard --confirm {manifest['key']}")
+    code = 3 if manifest.get("stale") else 0 if manifest.get("complete") else 2
+    return code, _record_setup(env, root, manifest, code)
 
 
 def main(argv=None) -> int:
@@ -996,7 +1097,11 @@ def main(argv=None) -> int:
     parser.add_argument("--warm", action="store_true", help="Warm one canonical repository slot.")
     parser.add_argument("--warm-all", action="store_true", help="Warm all configured repository slots sequentially.")
     parser.add_argument("--dry-run", action="store_true", help="Plan a warm operation without mutation.")
+    parser.add_argument("--provider", choices=("ado", "github"), default=None,
+                        help="Hosting provider for the PR (default: ado). PR setup only.")
+    review_envelope.add_arguments(parser)
     args = parser.parse_args(argv)
+    review_envelope.validate_arguments(parser, args)
     modes = sum(bool(value) for value in (args.preflight, args.status, args.warm, args.warm_all))
     if modes > 1:
         parser.error("--preflight, --status, --warm, and --warm-all are mutually exclusive")
@@ -1010,6 +1115,7 @@ def main(argv=None) -> int:
         "max_work_items": args.max_work_items != 2000,
         "max_commits": args.max_commits != 500,
         "dry_run": args.dry_run,
+        "provider": args.provider is not None,
     }
     if args.preflight:
         allowed = set()
@@ -1028,7 +1134,7 @@ def main(argv=None) -> int:
     else:
         allowed = {
             "pr_number", "slot", "org", "iteration", "max_depth",
-            "max_work_items", "max_commits",
+            "max_work_items", "max_commits", "provider",
         }
         mode_name = "PR setup"
     invalid = sorted(name for name, present in supplied.items() if present and name not in allowed)
@@ -1036,45 +1142,24 @@ def main(argv=None) -> int:
         parser.error(f"{mode_name} does not accept: {', '.join('--' + name.replace('_', '-') for name in invalid)}")
     if args.dry_run and not (args.warm or args.warm_all):
         parser.error("--dry-run is valid only with --warm or --warm-all")
+    if not (args.preflight or args.status or args.warm or args.warm_all) and args.pr_number is None:
+        parser.error("pr_number is required unless another mode is supplied")
+    operation = ("preflight" if args.preflight else "status" if args.status
+                 else "warm" if args.warm else "warm_all" if args.warm_all else "setup")
+    env = review_envelope.Envelope(operation, args.run_id)
+    show = (lambda text: None) if args.json else print
     try:
-        if args.preflight:
-            print(json.dumps(preflight(), indent=2))
-            return 0
-        root = discover_root(args.root)
-        if args.status:
-            print(json.dumps(status_run(root), indent=2))
-            return 0
-        if args.warm:
-            row = warm_run(root, args.repo, args.slot, dry_run=args.dry_run)
-            print(json.dumps(row, indent=2))
-            return 0 if row["status"] not in ("occupied", "blocked", "partial") else 2
-        if args.warm_all:
-            rows = warm_all_run(root, dry_run=args.dry_run)
-            print(json.dumps(rows, indent=2))
-            return 2 if any(row["status"] in ("occupied", "blocked", "partial") for row in rows) else 0
-        preflight()
-        if args.pr_number is None:
-            parser.error("pr_number is required unless another mode is supplied")
-        manifest = setup_run(root, args.pr_number, slot=args.slot, org=args.org, iteration=args.iteration,
-                             max_depth=args.max_depth, max_work_items=args.max_work_items, max_commits=args.max_commits)
-        slot_id = manifest.get("slot_id", f"legacy-{manifest['slot']}")
-        print(f"PR: {manifest['key']}\nSlot: {slot_id}\nBranch: {manifest['branch']}")
-        print(f"Worktree: {root / manifest['slot_path']}\nSource: {manifest['submodule']['path']}")
-        print(f"Head: {manifest['snapshot']['head_sha']}\nBase: {manifest.get('base_sha', 'unavailable')}")
-        for relative in manifest.get("report_paths", []):
-            print(f"Artifact: {root / manifest['slot_path'] / relative}")
-        print(f"Complete: {manifest.get('complete', False)}; stale: {manifest.get('stale', False)}")
-        script = Path(__file__).with_name("review_reset.py")
-        if manifest.get("schema_version") == 2:
-            selector = f"--slot {slot_id}"
-        else:
-            selector = f"--legacy-slot {manifest['slot']}"
-        print(f"Archive: python3 {script} {selector} --mode archive")
-        print(f"Discard: python3 {script} {selector} --mode discard --confirm {manifest['key']}")
-        return 3 if manifest.get("stale") else 0 if manifest.get("complete") else 2
+        code, status = _dispatch(args, env, show)
     except ReviewError as exc:
         print(f"Review setup stopped: {exc}", file=sys.stderr)
-        return exc.code
+        code, status = exc.code, _error_status(env, exc)
+    except Exception as exc:  # noqa: BLE001 - the envelope must survive any failure
+        print(f"Review setup failed: {exc}", file=sys.stderr)
+        env.effect("error", detail=f"{type(exc).__name__}: {exc}")
+        code, status = 1, "failed"
+    if args.json:
+        print(env.render(status))
+    return code
 
 
 if __name__ == "__main__":

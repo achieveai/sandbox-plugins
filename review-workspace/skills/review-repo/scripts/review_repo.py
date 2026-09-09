@@ -46,6 +46,12 @@ STATUSES = ("completed", "no_op", "retryable", "blocked", "failed")
 OWNED_DIRS = ("KnowledgeBase", "PRs", "DeveloperLearnings", "repos", ".agents/skills")
 GITKEEP = ".gitkeep"
 REPO_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# Same grammar the review-setup CLIs enforce, so one daemon run id addresses every script.
+RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# A skill bundle may only be named inside a repository's agent-skill trees.
+SKILL_BUNDLE_PREFIXES = ((".agents", "skills"), (".claude", "skills"))
+SKILL_BUNDLE_KEY = "skillBundle"
+BUNDLE_MANIFEST = "bundle.json"
 
 EXIT_OK, EXIT_ERROR, EXIT_UPGRADE, EXIT_CONFLICT = 0, 1, 2, 3
 
@@ -132,6 +138,41 @@ def parse_repo(spec: str) -> tuple[str, str]:
     return name, url
 
 
+def parse_skill_bundle(spec: str) -> dict:
+    """Parse ``--skill-bundle <plugin>=<relpath>`` into the manifest's selection key.
+
+    The path must be a plain relative POSIX path under an agent-skill tree. Nothing here
+    touches the filesystem: a key may legitimately be recorded before the bundle is
+    committed, and ``check`` is what reports a key that resolves to no bundle.
+    """
+    plugin, sep, relative = spec.partition("=")
+    if not sep or not plugin or not relative:
+        raise RepoError(f"--skill-bundle must be <plugin>=<relative-path>, got {spec!r}.")
+    if not REPO_NAME.fullmatch(plugin) or plugin in (".", "..") or plugin.endswith("."):
+        raise RepoError(f"Unsafe plugin name {plugin!r}; use letters, digits, '.', '_' or '-'.")
+    if "\\" in relative or any(ord(ch) < 32 for ch in relative) or relative.startswith("/"):
+        raise RepoError(f"Skill bundle path must be a plain relative POSIX path, got {relative!r}.")
+    parts = relative.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise RepoError(f"Skill bundle path has an empty or traversing segment: {relative!r}.")
+    if len(parts) < 3 or tuple(parts[:2]) not in SKILL_BUNDLE_PREFIXES:
+        allowed = " or ".join("/".join(prefix) for prefix in SKILL_BUNDLE_PREFIXES)
+        raise RepoError(f"Skill bundle path must name a directory under {allowed}, got {relative!r}.")
+    return {"plugin": plugin, "path": relative}
+
+
+def check_skill_bundle(root: Path, manifest: dict | None, result: Result) -> bool:
+    """Report a selection key whose path holds no bundle manifest. Returns True if missing."""
+    selection = (manifest or {}).get(SKILL_BUNDLE_KEY)
+    if not isinstance(selection, dict) or not isinstance(selection.get("path"), str):
+        return False
+    relative = selection["path"]
+    if (root / PurePosixPath(relative) / BUNDLE_MANIFEST).is_file():
+        return False
+    result.effect("skill_bundle_missing", relative, f"no {BUNDLE_MANIFEST} for plugin {selection.get('plugin')!r}")
+    return True
+
+
 def git_config(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess:
     command = ["git", "config", "-f", str(root / ".gitmodules"), *args]
     try:
@@ -156,9 +197,13 @@ def gitmodules_lookup(root: Path, name: str) -> dict[str, str] | None:
 # -- result envelope ---------------------------------------------------------
 
 class Result:
-    def __init__(self, operation: str):
+    def __init__(self, operation: str, run_id: str | None = None):
         self.operation = operation
-        self.run_id = utc_now().replace("-", "").replace(":", "") + "-" + uuid.uuid4().hex[:8]
+        # A caller-supplied identity is echoed verbatim so the dispatcher can correlate the
+        # envelope with the invocation; only an unaddressed run generates its own.
+        self.run_id = run_id or (
+            utc_now().replace("-", "").replace(":", "") + "-" + uuid.uuid4().hex[:8]
+        )
         self.status = "completed"
         self.code = EXIT_OK
         self.artifacts: list[dict] = []
@@ -240,12 +285,13 @@ def effective_manifest(root: Path) -> tuple[dict | None, Path | None]:
     return load_manifest(root), None
 
 
-def build_manifest(root: Path, created_at: str, submodules: list[str]) -> dict:
+def build_manifest(root: Path, created_at: str, submodules: list[str],
+                   skill_bundle: dict | None = None) -> dict:
     hashes = {}
     for relative in owned_files():
         path = root / PurePosixPath(relative)
         hashes[relative] = sha256_file(path) if path.is_file() else None
-    return {
+    manifest = {
         "schemaVersion": MANIFEST_SCHEMA_VERSION,
         "pluginVersion": plugin_version(),
         "createdAt": created_at,
@@ -254,6 +300,9 @@ def build_manifest(root: Path, created_at: str, submodules: list[str]) -> dict:
         "fileHashes": {k: v for k, v in hashes.items() if v is not None},
         "registeredSubmodules": sorted(set(submodules)),
     }
+    if skill_bundle is not None:
+        manifest[SKILL_BUNDLE_KEY] = skill_bundle
+    return manifest
 
 
 def diff_against(root: Path, manifest: dict | None, result: Result) -> tuple[list[str], list[str]]:
@@ -336,7 +385,16 @@ def registered_names(root: Path) -> list[str]:
     return names
 
 
-def op_plan(root: Path, repos: list[tuple[str, str]], result: Result) -> None:
+def resolve_skill_bundle(manifest: dict | None, requested: dict | None) -> dict | None:
+    """A request replaces the recorded selection; absence preserves it."""
+    if requested is not None:
+        return requested
+    existing = (manifest or {}).get(SKILL_BUNDLE_KEY)
+    return existing if isinstance(existing, dict) else None
+
+
+def op_plan(root: Path, repos: list[tuple[str, str]], result: Result,
+            skill_bundle: dict | None = None) -> None:
     manifest, journal = effective_manifest(root)
     if journal is not None:
         result.effect("interrupted_update", journal.relative_to(root).as_posix(), "run update to recover")
@@ -352,11 +410,14 @@ def op_plan(root: Path, repos: list[tuple[str, str]], result: Result) -> None:
     for entry in conflicts:
         result.effect("conflict", entry, "local edit -- bootstrap leaves it alone")
     register_submodules(root, repos, result, dry_run=True)
+    if skill_bundle is not None:
+        result.effect("skill_bundle", skill_bundle["path"], f"select {skill_bundle['plugin']}")
     if not result.effects:
         result.status = "no_op"
 
 
-def op_bootstrap(root: Path, repos: list[tuple[str, str]], result: Result) -> None:
+def op_bootstrap(root: Path, repos: list[tuple[str, str]], result: Result,
+                 skill_bundle: dict | None = None) -> None:
     manifest, journal = effective_manifest(root)
     probe = Result("probe")
     missing, _conflicts = diff_against(root, manifest, probe)
@@ -365,8 +426,12 @@ def op_bootstrap(root: Path, repos: list[tuple[str, str]], result: Result) -> No
     apply_skeleton(root, missing, result)
     names = sorted(set(registered_names(root)) | {name for name, _ in repos})
     created_at = (manifest or {}).get("createdAt") or utc_now()
-    new_manifest = build_manifest(root, created_at, names)
+    selection = resolve_skill_bundle(manifest, skill_bundle)
+    new_manifest = build_manifest(root, created_at, names, selection)
+    if skill_bundle is not None:
+        result.effect("skill_bundle", skill_bundle["path"], f"select {skill_bundle['plugin']}")
     if manifest is None or missing or changed or manifest.get("registeredSubmodules") != names \
+            or manifest.get(SKILL_BUNDLE_KEY) != selection \
             or manifest.get("pluginVersion") != new_manifest["pluginVersion"]:
         write_json(root / MANIFEST_NAME, new_manifest)
         result.artifact(MANIFEST_NAME, "manifest")
@@ -384,7 +449,8 @@ def op_check(root: Path, result: Result) -> None:
     if journal is not None:
         result.effect("interrupted_update", journal.relative_to(root).as_posix(), "run update to recover")
     missing, conflicts = diff_against(root, manifest, result)
-    if conflicts:
+    bundle_missing = check_skill_bundle(root, manifest, result)
+    if conflicts or bundle_missing:
         result.status, result.code = "blocked", EXIT_CONFLICT
     elif missing or journal is not None:
         result.status, result.code = "completed", EXIT_UPGRADE
@@ -420,10 +486,13 @@ def complete_rollback(path: Path) -> None:
     write_json(path, journal)
 
 
-def op_update(root: Path, result: Result) -> None:
+def op_update(root: Path, result: Result, skill_bundle: dict | None = None) -> None:
     manifest, journal = effective_manifest(root)
     probe = Result("probe")
     missing, conflicts = diff_against(root, manifest, probe)
+    # A selection may legitimately be recorded before the bundle is committed, so update
+    # never inspects it; `check` is what reports a key that resolves to no bundle.
+    selection = resolve_skill_bundle(manifest, skill_bundle)
     if conflicts:
         result.effects.extend(probe.effects)
         result.status, result.code = "blocked", EXIT_CONFLICT
@@ -434,15 +503,17 @@ def op_update(root: Path, result: Result) -> None:
         result.status, result.code = "completed", EXIT_UPGRADE
         result.messages.append("no manifest: run bootstrap first")
         return
-    if not missing and journal is None:
+    if not missing and journal is None and manifest.get(SKILL_BUNDLE_KEY) == selection:
         result.status = "no_op"
         return
     rollback = journal if journal is not None else write_rollback(root, manifest)
     result.artifact(rollback.relative_to(root).as_posix(), "rollback")
     apply_skeleton(root, missing, result)
+    if skill_bundle is not None:
+        result.effect("skill_bundle", skill_bundle["path"], f"select {skill_bundle['plugin']}")
     names = registered_names(root)
     created_at = (manifest or {}).get("createdAt") or utc_now()
-    write_json(root / MANIFEST_NAME, build_manifest(root, created_at, names))
+    write_json(root / MANIFEST_NAME, build_manifest(root, created_at, names, selection))
     result.artifact(MANIFEST_NAME, "manifest")
     complete_rollback(rollback)
     if journal is not None:
@@ -459,35 +530,46 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", action="append", default=[], metavar="NAME=URL",
                         help="Register a source submodule at repos/NAME (bootstrap/plan only; repeatable).")
     parser.add_argument("--dry-run", action="store_true", help="With bootstrap: report only, no mutation.")
+    parser.add_argument("--skill-bundle", metavar="PLUGIN=PATH",
+                        help="Record the skill bundle the review repository supplies, at a path "
+                             "under .agents/skills or .claude/skills (bootstrap/update only).")
     parser.add_argument("--json", action="store_true", help="Emit the result envelope as JSON.")
+    parser.add_argument("--run-id", help="Caller's run identity, echoed verbatim as the envelope's runId.")
     args = parser.parse_args(argv)
+    if args.run_id is not None and not RUN_ID_PATTERN.fullmatch(args.run_id):
+        parser.error("--run-id must match [A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
     operation = "plan" if args.operation == "plan" or (args.operation == "bootstrap" and args.dry_run) else args.operation
-    result = Result(operation)
+    result = Result(operation, args.run_id)
     try:
         if args.dry_run and args.operation not in ("plan", "bootstrap"):
             raise RepoError("--dry-run is valid only with plan or bootstrap.")
         if args.repo and args.operation not in ("plan", "bootstrap"):
             raise RepoError("--repo is valid only with plan or bootstrap.")
+        if args.skill_bundle and args.operation not in ("bootstrap", "update"):
+            raise RepoError("--skill-bundle is valid only with bootstrap or update.")
         repos = [parse_repo(spec) for spec in args.repo]
         if len({name for name, _ in repos}) != len(repos):
             raise RepoError("Duplicate --repo names.")
+        skill_bundle = parse_skill_bundle(args.skill_bundle) if args.skill_bundle else None
         root = resolve_root(args.root)
         if operation == "plan":
-            op_plan(root, repos, result)
+            op_plan(root, repos, result, skill_bundle)
         elif operation == "bootstrap":
-            op_bootstrap(root, repos, result)
+            op_bootstrap(root, repos, result, skill_bundle)
         elif operation == "check":
             op_check(root, result)
         else:
-            op_update(root, result)
+            op_update(root, result, skill_bundle)
     except RepoError as exc:
         result.status, result.code = exc.status, exc.code
         result.messages.append(str(exc))
         result.effect("error", "", str(exc))
         if not args.json:
             print(f"review-repo {operation} stopped: {exc}", file=sys.stderr)
-    print(json.dumps(result.envelope(), indent=2) if args.json else result.text())
+    # One line, so a reader that takes the last stdout line and a reader that parses the
+    # whole stream both see the same object.
+    print(json.dumps(result.envelope(), sort_keys=True) if args.json else result.text())
     return result.code
 
 

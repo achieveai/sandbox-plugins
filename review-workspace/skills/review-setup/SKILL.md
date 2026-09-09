@@ -199,6 +199,43 @@ infer the root when they live at `<review-repo-root>/.claude/skills/review-setup
 (four directories below the root). Installed anywhere else, a missing `--root` is
 refused with an explicit error rather than silently inferring the wrong directory.
 
+## Machine-readable output
+
+Both CLIs accept `--json`, which prints exactly one result-envelope object on stdout as a
+single line and nothing else, on every path including failures:
+
+```json
+{"schemaVersion":1,"status":"completed","runId":"...","operation":"setup","artifacts":[],"effects":[]}
+```
+
+`--json` requires `--run-id <id>`, the caller's own run identity, echoed verbatim as
+`runId`. Its grammar is `[A-Za-z0-9][A-Za-z0-9._-]{0,127}`. It is distinct from the
+script's internal manifest run id, which is reported as a `script_run_id` effect.
+
+Exit codes map onto envelope statuses faithfully — nothing is reinterpreted:
+
+| Exit | Meaning | `status` | Effect |
+|------|---------|----------|--------|
+| `0` | complete | `completed` | `setup_complete` |
+| `2` | partial context | `completed` | `partial_context` — the required scope was **not** satisfied |
+| `3` | snapshot moved; reset first | `blocked` | `stale_snapshot` |
+| `1` | refused | `failed` | `error`, or `unsupported_provider` |
+| `1` | another run holds the lock | `retryable` | `lock_contention` |
+
+`--status`, `--preflight` and dry-run warms report `no_op` with one `slot_status` effect
+per row. Argument errors are the one exception: they exit `2` from `argparse` before an
+operation exists to report on.
+
+Paths in `artifacts` and in effect detail fields are relative to `--root`, with POSIX
+separators.
+
+## Providers
+
+`--provider {ado,github}` selects the hosting provider for a PR setup (default `ado`);
+it is not accepted in the other modes. Only Azure DevOps is implemented. `--provider
+github` refuses immediately — before any filesystem or Git work — with exit `1`,
+`status: failed` and an `unsupported_provider` effect. The GitHub adapter is future work.
+
 ## Handing results to code-reviewer
 
 Read the produced `PR_Setup_NN.md` and pass it **verbatim** as a `Pre-fetched Context:`

@@ -10,6 +10,7 @@ from review_common import (ReviewError, ReviewState, SourcePool, assert_no_git_o
                            current_ref, discover_root, ensure_repository, file_hash,
                            git_status, preflight, read_submodules, repo_slug, run_git,
                            safe_path, utc_now, write_new_json)
+import review_envelope
 
 
 def _restore_source(state: ReviewState, manifest: dict) -> None:
@@ -88,7 +89,10 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
         if manifest["status"] in ("archived", "discarded"):
             return manifest
         files = state.validate_run_changes(manifest, archive=mode == "archive")
+        # slot_path/run_id are carried so a dry run reports the same identity a real reset
+        # does (a real reset returns the manifest itself); the human summary ignores both.
         return {"dry_run": True, "mode": mode, "slot": slot, "branch": manifest["branch"],
+                "slot_path": manifest["slot_path"], "run_id": manifest["run_id"],
                 "paths": files + [manifest["submodule"]["path"]], "restore_commit": manifest["baseline_sha"]}
     with state.lock():
         manifest = state.load(slot)
@@ -360,6 +364,8 @@ def reset_pool_run_locked(
             "mode": mode,
             "slot": manifest["slot_id"],
             "branch": manifest["branch"],
+            "slot_path": manifest["slot_path"],
+            "run_id": manifest["run_id"],
             "paths": files + [manifest["submodule"]["path"]],
             "restore_commit": manifest["baseline_sha"],
             "retained_commits": retained,
@@ -563,6 +569,23 @@ def _parse_pool_selector(value: str) -> tuple[str, int]:
     return repo, slot
 
 
+def _record_reset(env, result: dict, summary: dict) -> None:
+    """Map a completed reset onto the envelope; `paths` are the artifacts it touched."""
+    env.effect("script_run_id", detail=result.get("run_id", ""))
+    env.effect("reset_complete", path=result.get("slot_path", ""), **summary)
+    for relative in result.get("paths", []) or []:
+        env.artifact(f"{result['slot_path']}/{relative}" if result.get("slot_path") else relative, "file")
+
+
+def _error_status(env, exc: ReviewError) -> str:
+    """Lock contention is transient, so it is retryable; every other refusal is failed."""
+    if str(exc) == review_envelope.LOCK_CONTENTION_MESSAGE:
+        env.effect("lock_contention", detail=str(exc))
+        return "retryable"
+    env.effect(exc.effect_type, detail=exc.effect_detail or str(exc), message=str(exc))
+    return "failed"
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selector = parser.add_mutually_exclusive_group(required=True)
@@ -576,7 +599,10 @@ def main(argv=None) -> int:
     parser.add_argument("--confirm")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--root", help="Canonical review store root (normally inferred from this script).")
+    review_envelope.add_arguments(parser)
     args = parser.parse_args(argv)
+    review_envelope.validate_arguments(parser, args)
+    env = review_envelope.Envelope("reset", args.run_id)
     try:
         preflight()
         import json
@@ -592,15 +618,26 @@ def main(argv=None) -> int:
                 state, repo, slot, mode=args.mode,
                 confirm=args.confirm, dry_run=args.dry_run,
             )
-        print(json.dumps({key: result[key] for key in (
+        summary = {key: result[key] for key in (
             "dry_run", "mode", "status", "slot", "slot_id", "branch",
             "archive_branch", "paths", "restore_commit", "reset_warning",
             "maintenance",
-        ) if key in result}, indent=2))
-        return 0
+        ) if key in result}
+        if not args.json:
+            print(json.dumps(summary, indent=2))
+        _record_reset(env, result, summary)
+        status = "no_op" if args.dry_run else "completed"
+        code = 0
     except ReviewError as exc:
         print(f"Review reset stopped: {exc}", file=sys.stderr)
-        return exc.code
+        code, status = exc.code, _error_status(env, exc)
+    except Exception as exc:  # noqa: BLE001 - the envelope must survive any failure
+        print(f"Review reset failed: {exc}", file=sys.stderr)
+        env.effect("error", detail=f"{type(exc).__name__}: {exc}")
+        code, status = 1, "failed"
+    if args.json:
+        print(env.render(status))
+    return code
 
 
 if __name__ == "__main__":

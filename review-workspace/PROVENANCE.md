@@ -56,3 +56,25 @@ $ python -m pytest -q skills/review-setup/tests
 ```
 
 `review-setup` tests are POSIX-only (`fcntl`, `setsid`); they are not run on Windows.
+
+## 2026-09-08 — daemon-facing CLI contract (Slice 2)
+
+Behavioral changes to the supplied `review-setup` source, beyond the packaging-only
+adaptations recorded above. Every existing behaviour is preserved: no exit code changed,
+no workspace layout changed, no locking or atomic-write semantics changed, and human
+(non-`--json`) output is byte-identical.
+
+| File | Change |
+|------|--------|
+| `scripts/review_envelope.py` | **New.** The result envelope, the `--json` / `--run-id` flags and the run-id grammar, shared by both CLIs. |
+| `scripts/review_provider.py` | **New.** The provider seam. `AdoProvider` delegates to the existing `parse_ado_url`, `canonical_ado_metadata_url`, `AdoClient`, `review_context.resolve_pr` and `review_setup.select_module` verbatim — no logic moved. `GitHubProvider` is a stub whose every method raises. |
+| `scripts/review_common.py` | `ReviewError` gained optional keyword-only `effect_type` / `effect_detail`, so a specific refusal can be reported as a named envelope effect without matching on message text. Default behaviour is unchanged and both are ignored outside `--json`. |
+| `scripts/review_setup.py` | Added `--json`, `--run-id`, `--provider {ado,github}`. `main()`'s mode dispatch moved into `_dispatch()` so every path — including an uncaught exception — still prints one envelope. `setup_run()` gained a `provider=` parameter (default `AdoProvider`) and calls the provider for client construction, `resolve_pr` and `select_module` instead of calling them directly. |
+| `scripts/review_reset.py` | Added `--json` and `--run-id`; the existing summary is emitted as a `reset_complete` effect. |
+| `scripts/review_repo.py` | Added `--run-id` (echoed when supplied, self-generated when absent) and `--skill-bundle <plugin>=<relpath>` on bootstrap/update, written to the manifest as `skillBundle`. `check` reports `skill_bundle_missing` and blocks when the key resolves to no `bundle.json`. The `--json` envelope is now a single line rather than indented; its keys are unchanged. |
+| `bundle.json` | `review-setup` `entryPoints` gained `warm` and were reordered to `setup, status, warm, reset`. Version stays `0.1.0`. |
+| `SKILL.md` (both skills), `README.md` | Document the envelope, the exit-code -> status mapping, `--run-id`, `--provider` and `--skill-bundle`. |
+| `tests/test_envelope.py` (review-setup), `tests/test_skill_bundle.py` (review-repo) | **New.** Cover the envelope per mode and per exit code, the run-id grammar and echo, the GitHub stub creating nothing, and the manifest selection key. |
+
+No pre-existing test was modified. `--provider github` is a deliberate visible refusal, not
+an adapter; the GitHub implementation is future work.

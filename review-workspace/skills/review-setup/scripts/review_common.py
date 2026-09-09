@@ -20,9 +20,18 @@ import uuid
 
 
 class ReviewError(Exception):
-    def __init__(self, message: str, code: int = 1):
+    """A refusal with an exit code, and optionally the effect it should be reported as.
+
+    ``effect_type``/``effect_detail`` let a caller that emits the JSON result envelope
+    distinguish a specific refusal (for example an unsupported provider) from the generic
+    ``error`` effect, without matching on the message text.
+    """
+    def __init__(self, message: str, code: int = 1, *,
+                 effect_type: str = "error", effect_detail: str | None = None):
         super().__init__(message)
         self.code = code
+        self.effect_type = effect_type
+        self.effect_detail = effect_detail
 
 
 class CleanupNotProvenError(ReviewError):
