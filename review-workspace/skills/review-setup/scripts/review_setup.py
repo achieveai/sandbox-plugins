@@ -12,7 +12,7 @@ import uuid
 
 from review_common import (AdoClient, ReviewError, ReviewState, SourcePool, atomic_json, bounded_fetch,
                            cleanup_worktree, inspect_cleanup_tree, current_ref,
-                           discover_root, ensure_repository, file_hash, git_status, parse_ado_url,
+                           HistoryBudgetError, discover_root, ensure_repository, file_hash, git_status, parse_ado_url,
                            preflight, read_submodules, repo_slug, run_git, run_git_read, safe_path, utc_now,
                            validate_sha, worktree_rows, write_new_json, write_new_text)
 import review_envelope
@@ -517,7 +517,16 @@ def _collect(client, snapshot, source, base, *, max_depth, max_work_items, max_c
     while any(item.get("provenance_status") == "partial-shallow-history" for item in report.get("files", [])) and depth <= max_depth:
         if run_git(source, ["rev-parse", "--is-shallow-repository"]).stdout.strip() != "true":
             break
-        _deepen_history(source, snapshot, depth=depth, max_depth=max_depth)
+        try:
+            _deepen_history(source, snapshot, depth=depth, max_depth=max_depth)
+        except HistoryBudgetError as exc:
+            # Provenance is best effort. Servers without relative-depth fetch (Azure DevOps)
+            # re-acquire the whole reachable history for every deepen, so a budget refusal
+            # here ends deepening with the files still marked partial-shallow-history and
+            # the report incomplete (exit 2) instead of failing a prepared slot.
+            report.setdefault("warnings", []).append(f"History deepening stopped at the history budget: {exc}")
+            report["complete"] = False
+            break
         report = collect_context(client, snapshot, source, base, max_work_items=max_work_items, max_commits=max_commits)
         depth *= 10
     return report

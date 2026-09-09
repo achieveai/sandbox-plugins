@@ -116,6 +116,10 @@ artifact; committed prior evidence is never overwritten. Deleted untracked hando
 numbers are not reused. Full previous run records remain in `review-setup/setup-history/`.
 Use the same setup command to refresh incomplete provenance with a larger `--max-depth`;
 the default 1M is a fetch budget ceiling, not an eager download of one million commits.
+Deepening for provenance is best effort: when a deepen would exceed `--max-depth` (or the
+bounded compatibility fetch budget on servers without relative-depth fetch, such as Azure
+DevOps), setup stops deepening, keeps the affected files at `partial-shallow-history`, and
+exits `2`. Only the comparison base is required history; it still refuses at the budget.
 
 Exit codes: `0` complete, `2` partial context collected, `3` the PR snapshot changed
 mid-collection (report marked stale — explicit pooled setup cleans and recollects a

@@ -38,6 +38,15 @@ class CleanupNotProvenError(ReviewError):
     """An owned child process may still be running; no fallback may proceed."""
 
 
+class HistoryBudgetError(ReviewError):
+    """A fetch was refused because it would exceed the caller's history budget.
+
+    The repository is untouched. Callers that only wanted MORE history (provenance
+    deepening) may stop and report partial context; callers that NEED the history
+    (the comparison base) let it propagate as a refusal.
+    """
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -267,7 +276,7 @@ def bounded_fetch(repo: Path, remote: str, refs: list[str], *, depth: int,
     No alternate object directory, hand-edited shallow file, or checkout is used.
     """
     if not isinstance(depth, int) or isinstance(depth, bool) or not 0 < depth <= max_depth:
-        raise ReviewError("Bounded fetch depth is outside the configured history budget.")
+        raise HistoryBudgetError("Bounded fetch depth is outside the configured history budget.")
     shallow = run_git(repo, ["rev-parse", "--is-shallow-repository"]).stdout.strip() == "true"
     boundary = f"--deepen={depth}" if shallow or deepen else f"--depth={depth}"
     args = ["-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--no-tags", boundary, "--", remote, *refs]
@@ -284,7 +293,7 @@ def _fetch_via_bounded_store(repo: Path, remote: str, refs: list[str], *, depth:
     def command(path: Path, args: list[str], *, check: bool = True):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ReviewError("Bounded compatibility fetch exhausted its 300-second budget.")
+            raise HistoryBudgetError("Bounded compatibility fetch exhausted its 300-second budget.")
         return run_git(path, args, check=check, timeout=remaining)
 
     common = Path(command(repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]).stdout.strip())
@@ -300,7 +309,7 @@ def _fetch_via_bounded_store(repo: Path, remote: str, refs: list[str], *, depth:
     # length. Adding the requested deepen amount cannot under-fetch old roots.
     absolute_depth = max(depth, len(edges_before) + depth)
     if absolute_depth > max_depth:
-        raise ReviewError("Server lacks relative-depth fetch and absolute acquisition exceeds the history budget.")
+        raise HistoryBudgetError("Server lacks relative-depth fetch and absolute acquisition exceeds the history budget.")
     remote_url = remote
     if remote == "origin":
         remote_url = command(common, ["config", "--get", "remote.origin.url"]).stdout.strip()

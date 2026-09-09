@@ -138,3 +138,39 @@ class FetchCompatibilityTests(unittest.TestCase):
                 result=common.bounded_fetch(self.nested,'origin',[self.pr],depth=100,max_depth=1000)
             self.assertEqual(result.returncode,128);self.assertEqual(len(calls),1)
             self.assertFalse(list(self.pool.store.parent.glob('.bounded-fetch-*')))
+
+
+class CollectionDeepeningBudgetTests(unittest.TestCase):
+    """Provenance deepening is best effort: a history-budget refusal ends it as partial, not failed."""
+
+    def report(self):
+        return {"files": [{"path": "a.txt", "provenance_status": "partial-shallow-history"}],
+                "warnings": [], "complete": True}
+
+    def test_history_budget_refusal_ends_deepening_with_partial_provenance(self):
+        calls = []
+
+        def deepen(*args, **kwargs):
+            calls.append(kwargs.get("depth"))
+            raise common.HistoryBudgetError("Server lacks relative-depth fetch and absolute acquisition exceeds the history budget.")
+
+        with patch("review_context.collect_context", side_effect=lambda *a, **k: self.report()), \
+             patch("review_setup.run_git") as run_git, \
+             patch("review_setup._deepen_history", side_effect=deepen):
+            run_git.return_value.stdout = "true\n"
+            report = setup._collect(None, {}, Path("."), "base", max_depth=1000000, max_work_items=1, max_commits=1)
+        self.assertEqual(calls, [100])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["files"][0]["provenance_status"], "partial-shallow-history")
+        self.assertTrue(any("history budget" in warning for warning in report["warnings"]), report["warnings"])
+
+    def test_other_deepening_refusals_still_fail_collection(self):
+        with patch("review_context.collect_context", side_effect=lambda *a, **k: self.report()), \
+             patch("review_setup.run_git") as run_git, \
+             patch("review_setup._deepen_history", side_effect=common.ReviewError("History deepening was requested for a complete repository.")):
+            run_git.return_value.stdout = "true\n"
+            with self.assertRaisesRegex(common.ReviewError, "complete repository"):
+                setup._collect(None, {}, Path("."), "base", max_depth=1000000, max_work_items=1, max_commits=1)
+
+    def test_budget_refusals_are_history_budget_errors(self):
+        self.assertTrue(issubclass(common.HistoryBudgetError, common.ReviewError))
