@@ -72,7 +72,12 @@ is preserved and ignored by `check`.
   at `repos/<name>` via `git config -f .gitmodules` **without cloning** (no
   `git submodule update`), and write the manifest. Existing content and existing
   `.gitmodules` entries are untouched. Re-running on a bootstrapped root is a `no_op`.
-  Exit `0`; `3` if a `--repo` name is already registered with a different path or URL.
+  Registration matches on the **path**, not the `.gitmodules` section name: a repository
+  already registered at `repos/<name>` is left alone whatever its section is called
+  (reported as `submodule_already_registered` when the names differ), and the manifest
+  records it once, under the existing section name.
+  Exit `0`; `3` if `repos/<name>` is already registered with a different URL, or if the
+  section named `<name>` points at a different path.
 - **check**: compare the manifest's owned files and hashes with disk.
   Missing owned entries are reported as `upgrade_needed`; modified owned files as
   `conflict` ("local edit — refusing to overwrite"); unknown files are ignored.

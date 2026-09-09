@@ -194,6 +194,26 @@ def gitmodules_lookup(root: Path, name: str) -> dict[str, str] | None:
     return {"path": path.stdout.strip(), "url": url.stdout.strip()}
 
 
+def gitmodules_sections(root: Path) -> list[dict[str, str]]:
+    """Every registered submodule as {name, path, url}.
+
+    A section's name is arbitrary and need not equal the last component of its path: a
+    real review repository can carry `[submodule "repos/X"] path = repos/X`. Registration
+    therefore has to match on the path, not the name.
+    """
+    sections = []
+    for name in registered_names(root):
+        entry = gitmodules_lookup(root, name)
+        if entry is not None:
+            sections.append({"name": name, **entry})
+    return sections
+
+
+def find_registration(root: Path, relative: str) -> dict[str, str] | None:
+    """The existing section occupying `relative`, whatever it happens to be named."""
+    return next((s for s in gitmodules_sections(root) if s["path"] == relative), None)
+
+
 # -- result envelope ---------------------------------------------------------
 
 class Result:
@@ -348,20 +368,45 @@ def apply_skeleton(root: Path, missing: list[str], result: Result) -> None:
             result.artifact(entry, "file")
 
 
-def register_submodules(root: Path, repos: list[tuple[str, str]], result: Result, *, dry_run: bool) -> bool:
-    """Register missing entries; return True if anything changed. Conflicts raise."""
+def register_submodules(root: Path, repos: list[tuple[str, str]], result: Result,
+                        *, dry_run: bool) -> tuple[bool, list[str]]:
+    """Register missing entries.
+
+    Returns (anything changed, the effective section name of every requested repo). The
+    effective name is the EXISTING section's name when one already occupies `repos/<name>`,
+    so the manifest records the repo once rather than under both names. Conflicts raise.
+    """
     changed = False
+    effective: list[str] = []
     for name, url in repos:
         relative = f"repos/{name}"
-        existing = gitmodules_lookup(root, name)
+        # Match on the path first: a section occupying repos/<name> is this repo, however
+        # it is named. Appending a second section for the same path would be ambiguous
+        # both for git and for review_common.read_submodules.
+        existing = find_registration(root, relative)
         if existing is not None:
-            if existing["path"] == relative and existing["url"] == url:
-                continue
+            if existing["url"] != url:
+                raise RepoError(
+                    f"{relative!r} is already registered as submodule {existing['name']!r} with url "
+                    f"{existing['url']!r}, not {url!r}; existing .gitmodules entries are never rewritten.",
+                    EXIT_CONFLICT, "blocked",
+                )
+            # Re-registering an identical entry under its own name is plain idempotence and
+            # stays silent, so bootstrap remains a no_op. Report only when the section is
+            # named something other than the requested repo, which the caller cannot infer.
+            if existing["name"] != name:
+                result.effect("submodule_already_registered", relative,
+                              f"section {existing['name']!r} already points here; left untouched")
+            effective.append(existing["name"])
+            continue
+        conflicting = gitmodules_lookup(root, name)
+        if conflicting is not None:
             raise RepoError(
-                f"submodule {name!r} is already registered at {existing['path']!r} with url {existing['url']!r}; "
-                "existing .gitmodules entries are never rewritten.",
+                f"submodule {name!r} is already registered at {conflicting['path']!r} with url "
+                f"{conflicting['url']!r}; existing .gitmodules entries are never rewritten.",
                 EXIT_CONFLICT, "blocked",
             )
+        effective.append(name)
         if dry_run:
             result.effect("submodule_register", relative, f"{name} -> {url}")
             changed = True
@@ -371,7 +416,7 @@ def register_submodules(root: Path, repos: list[tuple[str, str]], result: Result
         result.effect("submodule_registered", relative, f"{name} -> {url}; not materialized")
         result.artifact(".gitmodules", "file")
         changed = True
-    return changed
+    return changed, effective
 
 
 def registered_names(root: Path) -> list[str]:
@@ -422,9 +467,11 @@ def op_bootstrap(root: Path, repos: list[tuple[str, str]], result: Result,
     probe = Result("probe")
     missing, _conflicts = diff_against(root, manifest, probe)
     # Bootstrap never overwrites: conflicting owned files are left as they are.
-    changed = register_submodules(root, repos, result, dry_run=False)
+    changed, effective = register_submodules(root, repos, result, dry_run=False)
     apply_skeleton(root, missing, result)
-    names = sorted(set(registered_names(root)) | {name for name, _ in repos})
+    # Union with the EFFECTIVE names, never the requested ones: a repo already registered
+    # under another section name must not be counted twice.
+    names = sorted(set(registered_names(root)) | set(effective))
     created_at = (manifest or {}).get("createdAt") or utc_now()
     selection = resolve_skill_bundle(manifest, skill_bundle)
     new_manifest = build_manifest(root, created_at, names, selection)

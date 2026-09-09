@@ -78,3 +78,27 @@ no workspace layout changed, no locking or atomic-write semantics changed, and h
 
 No pre-existing test was modified. `--provider github` is a deliberate visible refusal, not
 an adapter; the GitHub implementation is future work.
+
+## 2026-09-09 — submodule registration keys on path, not section name (P-1)
+
+Found on a real MCQdbReview clone whose `.gitmodules` carries
+`[submodule "repos/MCQdbDEV"] path = repos/MCQdbDEV`. A `.gitmodules` section name is
+arbitrary and need not equal the short repo name.
+
+`review_repo.py register_submodules` deduplicated by section name only, so
+`bootstrap --repo MCQdbDEV=<same url>` appended a **second** section
+`[submodule "MCQdbDEV"] path = repos/MCQdbDEV`. Two sections for one path are ambiguous
+for git and for `review_common.read_submodules`, and `op_bootstrap` then unioned the
+requested short name with `registered_names()`, recording the repo twice in the manifest's
+`registeredSubmodules`.
+
+| File | Change |
+|------|--------|
+| `scripts/review_repo.py` | New `gitmodules_sections()` / `find_registration()` match an existing registration by its `path`. `register_submodules` now returns `(changed, effective_names)`: an existing section occupying `repos/<name>` is left untouched and its own name is reported back, so `op_bootstrap` records the repo once. A URL that differs from the requested one on that path is refused with exit `3` instead of being silently kept. The same rule applies to `plan`. A section named `<name>` that points somewhere else is still refused, as before. |
+| `tests/test_submodule_registration.py` | **New.** Both defect cases (duplicate section, URL mismatch on the same path) for `bootstrap` and `plan`, plus four guards for behaviour that had to survive: an identically named matching section, a same-name/different-path refusal, an unrelated repo still registering, and repeated bootstrap idempotence. |
+| `skills/review-repo/SKILL.md` | Documents path-based matching and the two refusal cases. |
+
+Re-registering an identical entry under its own name stays silent and remains a `no_op`;
+`submodule_already_registered` is emitted only when the existing section name differs from
+the requested repo name, which the caller cannot otherwise infer. No pre-existing test was
+modified.
