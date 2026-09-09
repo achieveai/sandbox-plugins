@@ -1,0 +1,32 @@
+{
+  "bundleSchemaVersion": 1,
+  "plugin": "review-workspace",
+  "version": "0.1.0",
+  "skills": [
+    {
+      "id": "review-setup",
+      "entryPoints": {
+        "setup": "skills/review-setup/scripts/review_setup.py",
+        "reset": "skills/review-setup/scripts/review_reset.py",
+        "status": "skills/review-setup/scripts/review_setup.py --status"
+      },
+      "ioSchemaVersion": 1,
+      "requiredCapabilities": ["python3>=3.10", "git", "curl", "posix-flock"]
+    },
+    {
+      "id": "review-repo",
+      "entryPoints": {
+        "bootstrap": "skills/review-repo/scripts/review_repo.py bootstrap",
+        "check": "skills/review-repo/scripts/review_repo.py check",
+        "update": "skills/review-repo/scripts/review_repo.py update"
+      },
+      "ioSchemaVersion": 1,
+      "requiredCapabilities": ["python3>=3.10", "git"]
+    }
+  ],
+  "resultEnvelope": {
+    "schemaVersion": 1,
+    "fields": ["status", "runId", "operation", "artifacts", "effects"],
+    "statuses": ["completed", "no_op", "retryable", "blocked", "failed"]
+  }
+}

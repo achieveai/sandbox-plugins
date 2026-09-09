@@ -76,6 +76,15 @@
       "category": "development",
       "tags": ["azure-devops", "work-items", "pull-requests", "code-review", "backlog"],
       "keywords": ["ado-cli", "azure-devops-work-items", "azure-devops-pr", "backlog-triage", "code-review-response"]
+    },
+    {
+      "name": "review-workspace",
+      "source": "./review-workspace",
+      "description": "Versioned review-repository tooling for the code-review daemon: bootstrap/check/update the owned review-repo skeleton (KnowledgeBase/, PRs/, DeveloperLearnings/, repos/, .agents/skills/) with lazily-registered source submodules, and prepare/reset isolated per-PR review worktrees with pinned source snapshots and blame provenance. Collect-only: never pushes, comments, or invokes a review agent.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": ["code-review", "review-daemon", "worktree", "submodules", "azure-devops", "bootstrap"],
+      "keywords": ["review-workspace", "review-repo", "review-setup", "review-reset", "review-bootstrap", "knowledge-base", "pr-context", "warm-pool", "bundle-contract"]
     }
   ]
 }
