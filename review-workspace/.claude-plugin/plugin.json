@@ -1,0 +1,5 @@
+{
+  "name": "review-workspace",
+  "description": "Versioned review-repository tooling for the code-review daemon: bootstrap/check/update the owned review-repo skeleton (KnowledgeBase/, PRs/, DeveloperLearnings/, repos/, .agents/skills/) with lazily-registered source submodules, and prepare/reset isolated per-PR review worktrees with pinned source snapshots and blame provenance (review-setup). Collect-only: never pushes, comments, or invokes a review agent.",
+  "version": "0.1.0"
+}
