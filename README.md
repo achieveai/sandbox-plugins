@@ -50,6 +50,13 @@ CLI-native Azure DevOps workflows: work items, PR publish/babysit/tend, review-t
 and backlog triage. Every operation runs through a bundled `ado-cli.js`, spawned as a child
 process — no MCP server, no PAT interface. Authenticates via `sandbox-auth:azure-devops`.
 
+### mini-apps (v0.1.0)
+
+Build AgentWorkBench Mini Web Apps that work with the chat. The `mini-app-sdk` skill wires the
+AWB Mini App SDK (`/_awb/sdk.js`): labels so the user can point at parts of the app, a summary
+and details the agent reads (`ReadMiniAppContext`), and commands the agent runs
+(`RunMiniAppCommand`). Example app: `mini-apps/skills/mini-app-sdk/reference/deck-app.py`.
+
 ## Extensibility
 
 **Sandbox is the expected runtime context for these plugins, not a naming taxonomy.** This
@@ -71,6 +78,7 @@ sandbox-plugins/
 ├── sandbox/                # Workspace/runtime plugin
 ├── sandbox-auth/           # Egress-authentication plugin
 ├── azure-devops/           # CLI-native Azure DevOps plugin
+├── mini-apps/              # AgentWorkBench Mini App SDK skill
 ├── scratchpad/             # Research and development notes
 └── README.md                # This file
 ```
