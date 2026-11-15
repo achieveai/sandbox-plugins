@@ -42,24 +42,51 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("same-PR rerun", self.text)
         self.assertIn("Warm-only commands, status and dry-run remain non-destructive", self.text)
 
+    def test_verbose_and_structured_diagnostics_are_documented(self):
+        normalized = " ".join(self.text.split())
+        for requirement in (
+            "`--verbose`",
+            "stderr",
+            "stdout",
+            ".git/review-setup/logs/YYYY-MM-DD/",
+            "best-effort diagnostics only",
+            "never authorize cleanup or recovery",
+            "raw commands",
+            "tokens",
+            "PR content",
+        ):
+            self.assertIn(requirement, normalized)
+
+    def test_post_cleanup_dirt_requires_writer_coordination_and_normal_rerun(self):
+        normalized = " ".join(self.text.split())
+        for requirement in (
+            "may indicate writes after cleanup",
+            "coordinate any writer",
+            "rerun the same explicit setup",
+            "does not by itself prove concurrency",
+            "does not require manual journal recovery",
+        ):
+            self.assertIn(requirement, normalized)
+
     def test_long_running_setup_warning_is_preserved(self):
-        warning = (
-            "**Allow substantial time: review setup can take as much as 400 seconds (6 minutes\n"
-            "40 seconds), especially when initializing or fetching source repositories.** This is\n"
-            "not a guaranteed upper bound. Use an execution timeout longer than 400 seconds where\n"
-            "supported. A tool/client timeout does not prove the underlying setup or Git processes\n"
-            "have stopped: check process and slot recovery state before retrying. Do not launch a\n"
-            "duplicate setup while the original run is still active."
-        )
-        self.assertIn(warning, self.text)
+        normalized = " ".join(self.text.split())
+        for requirement in (
+            "400 seconds (6 minutes 40 seconds), or longer",
+            "Always run PR setup and mutating warm commands in the background",
+            "`run_in_background: true`",
+            "Monitor that **same task** with `TaskOutput`",
+            "Background mode does not remove execution limits",
+            "Verify the script's final exit code and output",
+            "Never launch a duplicate setup while the original request is queued or still active",
+            "Read-only `--preflight`, `--status`, and `--dry-run` checks may run in the foreground",
+        ):
+            self.assertIn(requirement, normalized)
+        self.assertIn("allowed-tools: Read, Bash, TaskOutput", self.text)
 
     def test_capacity_is_desired_not_claimed_ready(self):
-        # Plugin packaging: the repository list comes from the review repo's .gitmodules,
-        # not from a literal list in this document.
-        self.assertIn("configured in the review repo's `.gitmodules`", self.text)
-        for absent in ("Astra", "WeveNova", "MODISService"):
-            self.assertNotIn(absent, self.text)
-        for example in ("`Nova-0`", "`NovaClient-1`"):
+        for repository in ("Nova", "NovaClient", "Astra", "WeveNova", "MODISService"):
+            self.assertIn(repository, self.text)
+        for example in ("`Nova-0`", "`NovaClient-1`", "`MODISService-0`"):
             self.assertIn(example, self.text)
         self.assertIn("six slots (`0`–`5`)", self.text)
         self.assertIn("desired capacity of 30 slots", self.text)
@@ -89,8 +116,11 @@ class SkillDocumentationTests(unittest.TestCase):
         for command in commands:
             self.assertIn(command, self.text)
         self.assertIn("does not start 30 concurrent downloads", self.text)
-        for state in ("`absent`", "`warm`", "`occupied`", "`blocked`"):
+        for state in ("`absent`", "`warm`", "`stale`", "`occupied`", "`blocked`"):
             self.assertIn(state, self.text)
+        normalized = " ".join(self.text.split())
+        self.assertIn("stale dry-run reports `would-normalize`", normalized)
+        self.assertIn("Normal stale-baseline drift is handled automatically", normalized)
 
     def test_partial_and_warmup_disk_limits_are_documented(self):
         self.assertIn("pool `partial` state", self.text)
@@ -108,6 +138,18 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("warm source HEAD may intentionally differ", self.text)
         self.assertIn("outer NOVA store's recorded\ngitlink", self.text)
 
+    def test_canonical_artifact_path_and_legacy_manifest_policy_are_documented(self):
+        merge_skill = SKILL.parents[1] / "merge-review" / "SKILL.md"
+        merge_text = merge_skill.read_text(encoding="utf-8")
+        for text in (self.text, merge_text):
+            normalized = " ".join(text.split())
+            self.assertIn("PRs/{canonical-repo-name}-{pr}/", normalized)
+            self.assertIn("manifest-recorded", normalized)
+            self.assertIn("legacy lowercase", normalized)
+        self.assertIn("`repo-key`", self.text)
+        self.assertIn("review branch", self.text)
+        self.assertIn("retention refs", self.text)
+
     def test_legacy_slots_are_explicitly_separate(self):
         self.assertIn("Legacy schema-1 numeric slots remain separate and unchanged", self.text)
         self.assertIn("does not implicitly map", self.text)
@@ -119,6 +161,41 @@ class SkillDocumentationTests(unittest.TestCase):
         self.assertIn("recoverably blocked", self.text)
         for state in ("occupied", "absent"):
             self.assertIn(state, self.text)
+
+    def test_preservation_first_reclaim_and_acquisition_retry_are_documented(self):
+        normalized = " ".join(self.text.split())
+        for requirement in (
+            "--inspect-reclaim 5608966 --slot 0",
+            "--reclaim-generation <exact-sha256>",
+            "does not grant reclaim authorization",
+            "staged and unstaged state",
+            "untracked and ignored files",
+            "executable modes",
+            "symlink targets without following them",
+            "preservation_path",
+            "source-verified",
+            "same persisted reset mode",
+            "at most two",
+            "same aggregate history timeout",
+            "never byte-level Git resume",
+            "numeric Git progress",
+        ):
+            self.assertIn(requirement, normalized)
+
+    def test_slot_recovery_is_actionable_and_preserves_unknown_crash_limit(self):
+        normalized = " ".join(self.text.split())
+        for requirement in (
+            "review_setup.py --recover-slot --repo Nova --slot 2 --dry-run",
+            "review_setup.py --recover-slot --repo Nova --slot 2 --operator-assertion",
+            "prior_writers_retired: true",
+            "Never edit or unlink slot-writer JSON manually",
+            "free kernel lock",
+            "does not prove unknown writers retired",
+            "not a claim of automatic crash containment",
+            "repository-scoped shared-source journal",
+            "source_untouched",
+        ):
+            self.assertIn(requirement, normalized)
 
     def test_maintenance_safety_contract_is_documented(self):
         required = (

@@ -133,7 +133,7 @@ class ReviewSafetyTests(unittest.TestCase):
             f"url.{self.source.as_uri()}.insteadOf={self.url}",
             "submodule", "update", "--init", "--", "repos/Nova")
         git(checkout / "repos/Nova", "checkout", "--detach", self.head)
-        artifact = "PRs/nova-42/PR_Setup_01.json"
+        artifact = f'{manifest["pr_dir"]}/PR_Setup_01.json'
         common.write_new_json(checkout / artifact, {"run_id": manifest["run_id"]})
         manifest.update(source_prepared=True, base_sha=self.base, status="ready")
         manifest["artifacts"] = {artifact: common.file_hash(checkout / artifact)}
@@ -162,10 +162,26 @@ class ReviewSafetyTests(unittest.TestCase):
         self.assert_root_preserved()
 
     def test_active_allocation_lock_refuses_second_operation(self):
-        with self.state.lock():
-            with self.assertRaises(common.ReviewError):
-                with common.ReviewState(self.root).lock():
-                    self.fail("A second independent lock acquired the protected registry")
+        code = (
+            "import pathlib,sys,time; "
+            f"sys.path.insert(0,{str(SCRIPTS)!r}); "
+            "import review_common as c; "
+            f"s=c.ReviewState(pathlib.Path({str(self.root)!r})); "
+            "ctx=c.lock_session(5); ctx.__enter__(); "
+            "lock=s.lock(); lock.__enter__(); print('ready',flush=True); time.sleep(1)"
+        )
+        holder = subprocess.Popen(
+            [sys.executable, "-c", code],
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        self.addCleanup(lambda: holder.poll() is None and holder.kill())
+        self.assertEqual(holder.stdout.readline().strip(), "ready")
+        with common.lock_session(0), self.assertRaises(common.ReviewError):
+            with common.ReviewState(self.root).lock():
+                self.fail("A second independent lock acquired the protected registry")
+        self.assertEqual(holder.wait(timeout=3), 0)
+        holder.stdout.close()
         self.assertFalse((self.root / ".worktrees").exists())
         self.assert_root_preserved()
 
@@ -182,6 +198,57 @@ class ReviewSafetyTests(unittest.TestCase):
         self.assertEqual(git(self.state.slot_path(manifest), "symbolic-ref", "--short", "HEAD"), "review/nova-42")
         self.assert_root_preserved()
 
+    def test_ignored_paths_reports_real_ignored_files_after_ignore_rules_change(self):
+        hidden = self.root / "late-state/private.tmp"
+        hidden.parent.mkdir()
+        hidden.write_text("unexpected", encoding="utf-8")
+        self.assertIn("?? late-state/", git(self.root, "status", "--porcelain"))
+        with (self.root / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+            stream.write("\n/late-state/\n")
+        self.assertNotIn("late-state", git(self.root, "status", "--porcelain"))
+
+        self.assertEqual(common.git_ignored_paths(self.root), ["late-state/private.tmp"])
+
+    def test_ignored_paths_protected_scope_filters_exact_directory_boundary_nul_safely(self):
+        repository = self.directory / "ordinary-protected"
+        repository.mkdir()
+        git(repository, "init", "-b", "main")
+        protected = repository / "repos/Nova"
+        protected.mkdir(parents=True)
+        (protected / "private.tmp").write_text("managed source", encoding="utf-8")
+        retained = [
+            "repos/NovaPlus/sibling.tmp",
+            "repos/unexpected.tmp",
+            "repos/tab\tname.tmp",
+            "repos/line\nname.tmp",
+            "repos/:(glob)*?.tmp",
+        ]
+        for relative in retained:
+            target = repository / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("unexpected sibling", encoding="utf-8")
+        with (repository / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+            stream.write("\n/repos/\n")
+
+        self.assertEqual(
+            common.git_ignored_paths(repository, protected="repos/Nova"),
+            sorted(retained),
+        )
+
+    def test_ignored_paths_indexed_gitlink_does_not_descend_into_protected_path(self):
+        selected = self.root / "repos/Nova/private.tmp"
+        sibling = self.root / "repos/unexpected.tmp"
+        selected.parent.mkdir(parents=True, exist_ok=True)
+        selected.write_text("managed source", encoding="utf-8")
+        sibling.write_text("unexpected sibling", encoding="utf-8")
+        with (self.root / ".git/info/exclude").open("a", encoding="utf-8") as stream:
+            stream.write("\n/repos/\n")
+
+        self.assertEqual(
+            common.git_ignored_paths(self.root, protected="repos/Nova"),
+            ["repos/unexpected.tmp"],
+        )
+
     def test_archive_refuses_source_edit_without_staging_or_committing(self):
         _, slot, artifact = self.prepare()
         source_file = slot / "repos/Nova/source.txt"
@@ -196,8 +263,8 @@ class ReviewSafetyTests(unittest.TestCase):
         self.assert_root_preserved()
 
     def test_discard_refuses_unowned_new_review_output_and_preserves_owned_output(self):
-        _, slot, artifact = self.prepare()
-        unknown = slot / "PRs/nova-42/PR_Findings_01_user.md"
+        manifest, slot, artifact = self.prepare()
+        unknown = slot / manifest["pr_dir"] / "PR_Findings_01_user.md"
         unknown.write_text("User wrote this after setup\n", encoding="utf-8")
         with self.assertRaises(common.ReviewError):
             self.reset(mode="discard", confirm="nova-42")

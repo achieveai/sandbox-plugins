@@ -77,7 +77,7 @@ class FetchRecoveryTests(unittest.TestCase):
         snapshot = dict(self.snapshot, head_sha='f' * 40)
         original = common.run_git
         def failed_fetch(source, args, **kwargs):
-            if 'fetch' in args:
+            if 'fetch' in args and not any(value.startswith('file://') for value in args):
                 return subprocess.CompletedProcess(args, 128, '', "fatal: Authentication failed for 'https://user:SECRET@dev.azure.com/org/repo?token=PRIVATE' Authorization: Bearer CREDENTIAL")
             return original(source, args, **kwargs)
         with self.fixture_remote(), self.state.lock():

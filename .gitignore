@@ -70,3 +70,5 @@ inspirations/
 
 # Git worktrees
 .worktrees/
+
+.superpowers/

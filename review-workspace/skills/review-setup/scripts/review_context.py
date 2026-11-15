@@ -57,14 +57,39 @@ def _repo_api(snapshot):
     return f"{quote(str(repo['project']['id']), safe='')}/_apis/git/repositories/{quote(str(repo['id']), safe='')}"
 
 
-def resolve_pr(client, pr_number, iteration=None):
-    """Resolve a PR across the organization and pin one historical iteration."""
+def fetch_pr(client, pr_number):
+    """Fetch and validate the single raw PR payload for pr_number.
+
+    Exposed so a caller that needs additional raw PR fields beyond what
+    resolve_pr()'s snapshot exposes (for example the merge commit) can reuse
+    the exact same fetched state resolve_pr() uses, via resolve_pr(...,
+    pr_payload=...), instead of issuing a second GET and risking two
+    different observed states of a PR that could mutate between calls.
+    """
     pr_number = _positive_id(pr_number)
     if pr_number is None:
         raise ReviewError("PR number must be a positive integer.")
     pr = client.request("GET", f"_apis/git/pullrequests/{pr_number}?{API}")
     if not isinstance(pr, dict) or _positive_id(pr.get("pullRequestId")) != pr_number:
         raise ReviewError("Provider returned a different or invalid PR.")
+    return pr_number, pr
+
+
+def resolve_pr(client, pr_number, iteration=None, *, pr_payload=None):
+    """Resolve a PR across the organization and pin one historical iteration.
+
+    pr_payload, if given, must be the (pr_number, pr) tuple already returned
+    by fetch_pr() for this same pr_number -- letting a caller pin its own
+    additional reads of PR fields to this single fetched state rather than
+    re-fetching.
+    """
+    if pr_payload is not None:
+        fetched_number, pr = pr_payload
+        if fetched_number != _positive_id(pr_number):
+            raise ReviewError("Supplied PR payload does not match the requested PR number.")
+        pr_number = fetched_number
+    else:
+        pr_number, pr = fetch_pr(client, pr_number)
     repository = pr.get("repository") or {}
     project = repository.get("project") or {}
     if not all(isinstance(v, str) and v for v in (repository.get("id"), repository.get("name"), project.get("id"), project.get("name"))):

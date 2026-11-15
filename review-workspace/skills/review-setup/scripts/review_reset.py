@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from pathlib import Path
 import sys
 
 from review_common import (ReviewError, ReviewState, SourcePool, assert_no_git_operation,
-                           current_ref, discover_root, ensure_repository, file_hash,
-                           git_status, preflight, read_submodules, repo_slug, run_git,
-                           safe_path, utc_now, write_new_json)
-import review_envelope
+                           check_outer_merge_ready, check_prepared_slot_conflict, checkpoint_pool_run, current_ref,
+                           discover_root, ensure_repository, file_hash, git_status,
+                           bind_operation_context, lock_session, log_event, operation_logging, preflight, read_submodules, recover_pool_checkpoint,
+                           repo_slug, require_commit_identity, run_git, safe_path,
+                           slot_writer_scope, utc_now, write_new_json, atomic_json,
+                           inspect_checkout_preservation, preserve_checkout_generation,
+                           preservation_generation, cleanup_worktree,
+                           verify_preservation_archive)
 
 
 def _restore_source(state: ReviewState, manifest: dict) -> None:
@@ -40,17 +45,49 @@ def _restore_source(state: ReviewState, manifest: dict) -> None:
             raise ReviewError("Source checkout has ignored local data; refusing to deinitialize it.")
         index_sha = run_git(slot, ["rev-parse", f":{manifest['submodule']['path']}"]).stdout.strip()
         run_git(source, ["checkout", "--detach", index_sha])
-        run_git(slot, ["submodule", "deinit", "--", manifest["submodule"]["path"]])
+        with _legacy_outer_mutation(state, phase="legacy-source-deinit"):
+            run_git(slot, ["submodule", "deinit", "--", manifest["submodule"]["path"]])
 
 
 def _require_commit_identity(slot: Path) -> None:
-    # Ask Git for its effective identity without emitting it or supplying a fallback.
-    # Some Git builds accept an empty email at commit time; reject it explicitly.
-    import re
-    for variable in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
-        result = run_git(slot, ["var", variable], check=False)
-        if result.returncode or not re.fullmatch(r"[^<>\r\n]+ <[^<>\s]+> [0-9]+ [+-][0-9]{4}\n?", result.stdout):
-            raise ReviewError("Archive requires an existing Git author and committer identity; no identity was configured or guessed.")
+    require_commit_identity(slot, operation="Archive")
+
+
+@contextmanager
+def _legacy_outer_mutation(state: ReviewState, *, phase: str):
+    """Revalidate root reservation/writer state under outer protection."""
+    with state.outer_lock(phase=phase):
+        check_outer_merge_ready(state)
+        yield
+
+
+def _archive_pool_branch(
+    state: ReviewState, outer: Path, manifest: dict, archive: str
+) -> None:
+    """Rename one owned review branch under shared outer administration."""
+    with state.outer_lock(phase="pooled-archive-branch"):
+        check_outer_merge_ready(state)
+        active = current_ref(outer)
+        if active == manifest["branch"]:
+            existing = run_git(
+                state.root,
+                ["show-ref", "--verify", "--quiet", f"refs/heads/{archive}"],
+                check=False,
+            )
+            if existing.returncode == 0:
+                raise ReviewError("Archive branch already exists; refusing overwrite.")
+            run_git(outer, ["branch", "-m", archive])
+            if current_ref(outer) != archive:
+                raise ReviewError("Archive branch identity did not match after rename.")
+        elif active != archive:
+            raise ReviewError("Pooled branch changed while archiving.")
+        archived = run_git(
+            state.root,
+            ["rev-parse", "--verify", f"refs/heads/{archive}"],
+        ).stdout.strip()
+        expected = manifest.get("checkpoint_sha") or manifest.get("branch_start")
+        if archived != expected:
+            raise ReviewError("Archive branch tip does not match its owned checkpoint.")
 
 
 def _checkpoint(
@@ -61,7 +98,18 @@ def _checkpoint(
     slot: Path | None = None,
 ) -> None:
     slot = slot or state.slot_path(manifest)
-    # No root-wide `git add`: only explicitly validated PR paths and this gitlink.
+    if manifest.get("schema_version") == 2:
+        checkpoint_pool_run(
+            state,
+            manifest,
+            files,
+            slot=slot,
+            message=f"Archive review {manifest['key']} ({manifest['run_id']})",
+            trailer=f"Review-Setup-Run: {manifest['run_id']}",
+            command=run_git,
+        )
+        return
+    # Preserve schema-1 behavior while pooled callers share the stricter helper.
     paths = sorted(set(files + [manifest["submodule"]["path"]]))
     manifest["checkpoint_paths"] = paths
     manifest["status"] = "checkpointing"
@@ -86,17 +134,15 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
         raise ReviewError("Reset mode must be archive or discard.")
     if dry_run:
         manifest = state.load(slot)
-        if manifest["status"] in ("archived", "discarded"):
+        if manifest["status"] in ("archived", "discarded", "merged"):
             return manifest
         files = state.validate_run_changes(manifest, archive=mode == "archive")
-        # slot_path/run_id are carried so a dry run reports the same identity a real reset
-        # does (a real reset returns the manifest itself); the human summary ignores both.
         return {"dry_run": True, "mode": mode, "slot": slot, "branch": manifest["branch"],
-                "slot_path": manifest["slot_path"], "run_id": manifest["run_id"],
                 "paths": files + [manifest["submodule"]["path"]], "restore_commit": manifest["baseline_sha"]}
     with state.lock():
+        check_outer_merge_ready(state)
         manifest = state.load(slot)
-        if manifest["status"] in ("archived", "discarded"):
+        if manifest["status"] in ("archived", "discarded", "merged"):
             return manifest
         if mode == "discard" and confirm != manifest["key"]:
             raise ReviewError(f"Discard requires --confirm {manifest['key']}.")
@@ -135,7 +181,8 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
             manifest["reset_mode"] = mode
             state.save(manifest)
             if mode == "archive":
-                _checkpoint(state, manifest, files)
+                with _legacy_outer_mutation(state, phase="legacy-checkpoint"):
+                    _checkpoint(state, manifest, files)
             else:
                 manifest["discard_paths"] = files
                 manifest["status"] = "discarding"
@@ -151,7 +198,8 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
             if active == manifest["branch"]:
                 if run_git(worktree, ["show-ref", "--verify", "--quiet", f"refs/heads/{archive}"], check=False).returncode == 0:
                     raise ReviewError("Archive branch already exists; refusing overwrite.")
-                run_git(worktree, ["branch", "-m", archive])
+                with _legacy_outer_mutation(state, phase="legacy-archive-branch"):
+                    run_git(worktree, ["branch", "-m", archive])
             elif active != archive:
                 raise ReviewError("Branch changed while archiving.")
             manifest["status"] = "renamed"
@@ -175,19 +223,20 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
         if manifest["status"] != "detached":
             manifest["status"] = "restoring"
             state.save(manifest)
-            _restore_source(state, manifest)
-            if git_status(worktree):
-                # Source gitlink can differ transiently when restoring an initialized
-                # baseline; no other dirty path is permitted before checkout.
-                if any(path != manifest["submodule"]["path"] for _, path in git_status(worktree)):
-                    raise ReviewError("Slot has new changes; restore stopped safely.")
-            if manifest.get("baseline_ref"):
-                ref = manifest["baseline_ref"]
-                if run_git(worktree, ["rev-parse", ref]).stdout.strip() != manifest["baseline_sha"]:
-                    raise ReviewError("Recorded baseline ref moved; refusing to switch it.")
-                run_git(worktree, ["checkout", ref])
-            else:
-                run_git(worktree, ["checkout", "--detach", manifest["baseline_sha"]])
+            with _legacy_outer_mutation(state, phase="legacy-restore"):
+                _restore_source(state, manifest)
+                if git_status(worktree):
+                    # Source gitlink can differ transiently when restoring an initialized
+                    # baseline; no other dirty path is permitted before checkout.
+                    if any(path != manifest["submodule"]["path"] for _, path in git_status(worktree)):
+                        raise ReviewError("Slot has new changes; restore stopped safely.")
+                if manifest.get("baseline_ref"):
+                    ref = manifest["baseline_ref"]
+                    if run_git(worktree, ["rev-parse", ref]).stdout.strip() != manifest["baseline_sha"]:
+                        raise ReviewError("Recorded baseline ref moved; refusing to switch it.")
+                    run_git(worktree, ["checkout", ref])
+                else:
+                    run_git(worktree, ["checkout", "--detach", manifest["baseline_sha"]])
             manifest["status"] = "detached"
             state.save(manifest)
         if git_status(worktree):
@@ -201,7 +250,8 @@ def reset_run(state: ReviewState, slot: int, *, mode: str = "archive", confirm: 
                     raise ReviewError("Review branch changed during discard; refusing deletion.")
                 if branch in state.registered().values():
                     raise ReviewError("Review branch is checked out elsewhere; refusing deletion.")
-                run_git(state.root, ["update-ref", "-d", f"refs/heads/{branch}", expected])
+                with _legacy_outer_mutation(state, phase="legacy-delete-ref"):
+                    run_git(state.root, ["update-ref", "-d", f"refs/heads/{branch}", expected])
         manifest["status"] = "archived" if mode == "archive" else "discarded"
         state.save(manifest)
         history = state.directory / "history" / f"{manifest['run_id']}.json"
@@ -263,32 +313,12 @@ def _validate_pool_idle(outer: Path, manifest: dict) -> None:
 
 
 def _recover_pool_checkpoint(state: ReviewState, manifest: dict, outer: Path) -> bool:
-    """Recover an exact completed checkpoint; return False when it must be retried."""
-    tip = run_git(outer, ["rev-parse", "HEAD"]).stdout.strip()
-    if tip == manifest["branch_start"]:
-        return False
-    parent = run_git(outer, ["rev-parse", "HEAD^"], check=False)
-    message = run_git(outer, ["log", "-1", "--format=%B"]).stdout
-    changed = set(
-        filter(
-            None,
-            run_git(
-                outer,
-                ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "HEAD"],
-            ).stdout.split("\0"),
-        )
+    return recover_pool_checkpoint(
+        state,
+        manifest,
+        outer,
+        trailer=f"Review-Setup-Run: {manifest['run_id']}",
     )
-    if (
-        parent.returncode
-        or parent.stdout.strip() != manifest["branch_start"]
-        or f"Review-Setup-Run: {manifest['run_id']}" not in message
-        or not changed.issubset(set(manifest.get("checkpoint_paths", [])))
-    ):
-        raise ReviewError("Unrecognized commit appeared during pooled checkpoint recovery.")
-    manifest["checkpoint_sha"] = tip
-    manifest["status"] = "checkpointed"
-    state.save_pool_run(manifest)
-    return True
 
 
 def reset_pool_run_locked(
@@ -309,7 +339,20 @@ def reset_pool_run_locked(
         raise ReviewError("No managed pooled run exists for that repository slot.")
     if manifest.get("repo_name") != pool.repo_name or manifest.get("slot_id") != pool.slot_name(slot):
         raise ReviewError("Pooled run selector does not match its manifest identity.")
-    if manifest["status"] in ("archived", "discarded"):
+    bind_operation_context(
+        run_id=manifest.get("run_id"),
+        slot_id=manifest.get("slot_id"),
+        repo_id=manifest.get("repo_key"),
+        phase=manifest.get("reset_phase"),
+    )
+    log_event(
+        "reset.phase",
+        "Reset manifest loaded",
+        phase=manifest.get("reset_phase") or "begin",
+        mode=mode,
+        outcome="validated",
+    )
+    if manifest["status"] in ("archived", "discarded", "merged"):
         return manifest
     if mode == "discard" and confirm != manifest["key"]:
         raise ReviewError(f"Discard requires --confirm {manifest['key']}.")
@@ -358,17 +401,23 @@ def reset_pool_run_locked(
     if any(not value for value in retained.values()):
         raise ReviewError("Pooled run lacks an exact commit required for retention.")
     if dry_run:
-        files = state.validate_pool_run_changes(manifest, archive=mode == "archive")
+        if phase in detached_phases:
+            _validate_pool_idle(outer, manifest)
+            files = list(manifest.get("checkpoint_paths") or manifest.get("discard_paths") or [])
+        else:
+            files = state.validate_pool_run_changes(
+                manifest, archive=mode == "archive"
+            )
         return {
             "dry_run": True,
             "mode": mode,
             "slot": manifest["slot_id"],
             "branch": manifest["branch"],
-            "slot_path": manifest["slot_path"],
-            "run_id": manifest["run_id"],
             "paths": files + [manifest["submodule"]["path"]],
             "restore_commit": manifest["baseline_sha"],
             "retained_commits": retained,
+            "reset_phase": phase,
+            "next_action": "resume-reset" if phase else "begin-reset",
         }
 
     manifest["reset_mode"] = mode
@@ -441,20 +490,17 @@ def reset_pool_run_locked(
 
     if mode == "archive" and manifest["reset_phase"] == "branch-archive-intent":
         archive = manifest["archive_branch"]
-        active = current_ref(outer)
-        if active == manifest["branch"]:
-            existing = run_git(
-                state.root,
-                ["show-ref", "--verify", "--quiet", f"refs/heads/{archive}"],
-                check=False,
-            )
-            if existing.returncode == 0:
-                raise ReviewError("Archive branch already exists; refusing overwrite.")
-            run_git(outer, ["branch", "-m", archive])
-        elif active != archive:
-            raise ReviewError("Pooled branch changed while archiving.")
+        _archive_pool_branch(state, outer, manifest, archive)
         manifest["reset_phase"] = "branch-archived"
         state.save_pool_run(manifest)
+        bind_operation_context(phase=manifest["reset_phase"])
+        log_event(
+            "reset.phase",
+            "Archive branch publication completed",
+            phase=manifest["reset_phase"],
+            mode=mode,
+            outcome="success",
+        )
 
     if manifest["reset_phase"] in ("branch-archived", "artifacts-discarded"):
         manifest["reset_phase"] = "outer-detach-intent"
@@ -498,6 +544,132 @@ def reset_pool_run_locked(
         state.save_pool_run(manifest)
 
     if manifest["reset_phase"] == "source-verified":
+        rows = git_status(outer)
+        allowed = [(
+            " M",
+            manifest["submodule"]["path"],
+        )]
+        unexpected = rows not in ([], allowed)
+        if unexpected or manifest.get("reset_preservation_journal"):
+            journal_path = Path(
+                manifest.get("reset_preservation_journal")
+                or safe_path(
+                    state.directory,
+                    f"cleanup/reset-{manifest['repo_key']}-{slot}-{manifest['run_id']}.json",
+                )
+            )
+            journal = None
+            if journal_path.exists():
+                try:
+                    import json
+
+                    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    raise ReviewError("Reset preservation journal is unreadable.") from None
+            if journal is None:
+                inspection = inspect_checkout_preservation(
+                    outer,
+                    protected=safe_path(outer, manifest["submodule"]["path"]),
+                )
+                binding = {
+                    "schema_version": 1,
+                    "workspace_identity": state.identity,
+                    "outer": inspection,
+                }
+                journal = {
+                    "schema_version": 1,
+                    "identity": state.identity,
+                    "repo_key": manifest["repo_key"],
+                    "slot_number": slot,
+                    "run_id": manifest["run_id"],
+                    "reset_mode": mode,
+                    "phase": "preserving",
+                    "id": f"reset-{manifest['run_id']}-{slot}",
+                    "generation": preservation_generation(binding),
+                    "binding": binding,
+                }
+                atomic_json(journal_path, journal)
+                manifest["reset_preservation_journal"] = str(journal_path)
+                state.save_pool_run(manifest)
+            required = {
+                "identity": state.identity,
+                "repo_key": manifest["repo_key"],
+                "slot_number": slot,
+                "run_id": manifest["run_id"],
+                "reset_mode": mode,
+            }
+            if any(journal.get(key) != value for key, value in required.items()):
+                raise ReviewError("Reset preservation journal belongs to another operation.")
+            if journal.get("phase") == "preserving":
+                fresh = inspect_checkout_preservation(
+                    outer,
+                    protected=safe_path(outer, manifest["submodule"]["path"]),
+                )
+                binding = {
+                    "schema_version": 1,
+                    "workspace_identity": state.identity,
+                    "outer": fresh,
+                }
+                if (
+                    preservation_generation(binding) != journal.get("generation")
+                    or binding != journal.get("binding")
+                ):
+                    raise ReviewError(
+                        "Reset preservation input changed before capture; slot remains untouched."
+                    )
+                preserved = preserve_checkout_generation(
+                    state,
+                    fresh,
+                    operation_id=journal["id"],
+                    repository=outer,
+                )
+                journal["preservation_path"] = preserved["path"]
+                journal["manifest_sha256"] = preserved["manifest_sha256"]
+                journal["phase"] = "preserved"
+                atomic_json(journal_path, journal)
+            if journal.get("phase") == "preserved":
+                fresh = inspect_checkout_preservation(
+                    outer,
+                    protected=safe_path(outer, manifest["submodule"]["path"]),
+                )
+                binding = {
+                    "schema_version": 1,
+                    "workspace_identity": state.identity,
+                    "outer": fresh,
+                }
+                if (
+                    preservation_generation(binding) != journal.get("generation")
+                    or binding != journal.get("binding")
+                ):
+                    raise ReviewError(
+                        "Reset preservation input changed after capture; slot remains untouched."
+                    )
+                preservation_path = journal.get("preservation_path")
+                expected_preservation_path = str(
+                    state.directory / "preservations" / journal["id"]
+                )
+                if (
+                    not isinstance(preservation_path, str)
+                    or preservation_path != expected_preservation_path
+                ):
+                    raise ReviewError("Preservation archive journal binding is invalid.")
+                verify_preservation_archive(
+                    Path(preservation_path),
+                    expected_manifest_sha256=journal.get("manifest_sha256"),
+                    expected_generation=journal["generation"],
+                    expected_binding=journal["binding"],
+                )
+                cleanup_worktree(
+                    outer,
+                    manifest["root_head"],
+                    protected=manifest["submodule"]["path"],
+                )
+                journal["phase"] = "cleaned"
+                atomic_json(journal_path, journal)
+            if journal.get("phase") != "cleaned":
+                raise ReviewError("Reset preservation journal has an unsupported phase.")
+            manifest["reset_preservation_path"] = journal["preservation_path"]
+            state.save_pool_run(manifest)
         _validate_pool_idle(outer, manifest)
         if mode == "discard":
             branch_ref = f"refs/heads/{manifest['branch']}"
@@ -516,6 +688,14 @@ def reset_pool_run_locked(
             manifest["archived_at"] = utc_now()
         manifest["reset_phase"] = "released"
         state.save_pool_run(manifest)
+        bind_operation_context(phase="released")
+        log_event(
+            "reset.phase",
+            "Reset reached durable released state",
+            phase="released",
+            mode=mode,
+            outcome="success",
+        )
 
     if run_maintenance and manifest["reset_phase"] == "released" and "maintenance" not in manifest:
         try:
@@ -535,7 +715,14 @@ def reset_pool_run(
     confirm: str | None = None,
     dry_run: bool = False,
     run_maintenance: bool = True,
+    lock_timeout: float = 1200,
 ) -> dict:
+    # Fail-closed compatibility guard (rulings R2, R18): before this slot is
+    # ever touched -- dry-run inspection included -- refuse if Task 3's
+    # new-format prepared-slot manifest disagrees with the legacy manifest
+    # about which PR currently occupies it. No other reset behavior changes.
+    _, pool = _pool_module(state, repo)
+    check_prepared_slot_conflict(state, pool, slot)
     if dry_run:
         # Inspection must not create/open lifecycle lock state. The inner path
         # performs no writes and uses only an existing manifest/worktrees.
@@ -548,7 +735,12 @@ def reset_pool_run(
             dry_run=True,
             run_maintenance=False,
         )
-    with state.lock():
+    with (
+        lock_session(lock_timeout),
+        state.lock(shared=True, phase="pooled-reset"),
+        state.slot_lock(pool.repo_key, slot, phase="pooled-reset"),
+        slot_writer_scope(state, pool.repo_key, slot, phase="pooled-reset"),
+    ):
         return reset_pool_run_locked(
             state,
             repo,
@@ -569,24 +761,7 @@ def _parse_pool_selector(value: str) -> tuple[str, int]:
     return repo, slot
 
 
-def _record_reset(env, result: dict, summary: dict) -> None:
-    """Map a completed reset onto the envelope; `paths` are the artifacts it touched."""
-    env.effect("script_run_id", detail=result.get("run_id", ""))
-    env.effect("reset_complete", path=result.get("slot_path", ""), **summary)
-    for relative in result.get("paths", []) or []:
-        env.artifact(f"{result['slot_path']}/{relative}" if result.get("slot_path") else relative, "file")
-
-
-def _error_status(env, exc: ReviewError) -> str:
-    """Lock contention is transient, so it is retryable; every other refusal is failed."""
-    if str(exc) == review_envelope.LOCK_CONTENTION_MESSAGE:
-        env.effect("lock_contention", detail=str(exc))
-        return "retryable"
-    env.effect(exc.effect_type, detail=exc.effect_detail or str(exc), message=str(exc))
-    return "failed"
-
-
-def main(argv=None) -> int:
+def _main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument(
@@ -598,16 +773,17 @@ def main(argv=None) -> int:
     parser.add_argument("--mode", choices=("archive", "discard"), default="archive")
     parser.add_argument("--confirm")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--lock-timeout", type=float, default=1200)
     parser.add_argument("--root", help="Canonical review store root (normally inferred from this script).")
-    review_envelope.add_arguments(parser)
+    parser.add_argument("--verbose", action="store_true", help="Show safe lifecycle progress on stderr; stdout remains unchanged.")
     args = parser.parse_args(argv)
-    review_envelope.validate_arguments(parser, args)
-    env = review_envelope.Envelope("reset", args.run_id)
     try:
         preflight()
         import json
         state = ReviewState(discover_root(args.root))
         if args.legacy_slot is not None:
+            if args.lock_timeout != 1200:
+                raise ReviewError("--lock-timeout applies only to pooled reset.")
             result = reset_run(
                 state, args.legacy_slot, mode=args.mode,
                 confirm=args.confirm, dry_run=args.dry_run,
@@ -617,27 +793,51 @@ def main(argv=None) -> int:
             result = reset_pool_run(
                 state, repo, slot, mode=args.mode,
                 confirm=args.confirm, dry_run=args.dry_run,
+                lock_timeout=args.lock_timeout,
             )
-        summary = {key: result[key] for key in (
+        bind_operation_context(
+            run_id=result.get("run_id"),
+            slot_id=result.get("slot_id", result.get("slot")),
+            repo_id=result.get("repo_key"),
+            phase=result.get("reset_phase"),
+        )
+        print(json.dumps({key: result[key] for key in (
             "dry_run", "mode", "status", "slot", "slot_id", "branch",
             "archive_branch", "paths", "restore_commit", "reset_warning",
             "maintenance",
-        ) if key in result}
-        if not args.json:
-            print(json.dumps(summary, indent=2))
-        _record_reset(env, result, summary)
-        status = "no_op" if args.dry_run else "completed"
-        code = 0
+        ) if key in result}, indent=2))
+        return 0
     except ReviewError as exc:
         print(f"Review reset stopped: {exc}", file=sys.stderr)
-        code, status = exc.code, _error_status(env, exc)
-    except Exception as exc:  # noqa: BLE001 - the envelope must survive any failure
-        print(f"Review reset failed: {exc}", file=sys.stderr)
-        env.effect("error", detail=f"{type(exc).__name__}: {exc}")
-        code, status = 1, "failed"
-    if args.json:
-        print(env.render(status))
-    return code
+        return exc.code
+
+
+def main(argv=None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    verbose = "--verbose" in raw
+    root_value = None
+    slot_id = None
+    try:
+        if "--root" in raw:
+            root_value = Path(raw[raw.index("--root") + 1])
+        else:
+            root_value = discover_root(None)
+    except (IndexError, ReviewError):
+        root_value = None
+    if "--slot" in raw:
+        try:
+            slot_id = raw[raw.index("--slot") + 1]
+        except IndexError:
+            pass
+    with operation_logging(
+        root_value,
+        command="reset",
+        verbose=verbose,
+        slot_id=slot_id,
+    ) as operation:
+        code = _main(raw)
+        operation.finish(code, None if code == 0 else "ReviewError")
+        return code
 
 
 if __name__ == "__main__":
