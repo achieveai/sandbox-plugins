@@ -1,0 +1,5 @@
+{
+  "name": "mini-apps",
+  "description": "Skills for building AgentWorkBench Mini Web Apps that work with the chat. mini-app-sdk wires the AWB Mini App SDK so the user can point at any part of an app and the agent can read what it shows and drive it through declared commands.",
+  "version": "0.1.0"
+}

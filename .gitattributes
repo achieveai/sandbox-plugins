@@ -14,6 +14,9 @@
 # Shell scripts
 *.sh text eol=lf
 
+# Python scripts run in the Linux sandbox; a CRLF shebang breaks them
+*.py text eol=lf
+
 # Windows scripts
 *.bat text eol=crlf
 *.cmd text eol=crlf

@@ -85,6 +85,15 @@
       "category": "development",
       "tags": ["code-review", "review-daemon", "worktree", "submodules", "azure-devops", "bootstrap"],
       "keywords": ["review-workspace", "review-repo", "review-setup", "review-reset", "review-bootstrap", "knowledge-base", "pr-context", "warm-pool", "bundle-contract"]
+    },
+    {
+      "name": "mini-apps",
+      "source": "./mini-apps",
+      "description": "Build AgentWorkBench Mini Web Apps that work with the chat. mini-app-sdk wires the AWB Mini App SDK (/_awb/sdk.js): data-awb labels and describers so the user can point at any part of an app, a context summary and named details the agent reads with ReadMiniAppContext, and declared commands the agent runs with RunMiniAppCommand to change the app the way a user would.",
+      "version": "0.1.0",
+      "category": "development",
+      "tags": ["mini-apps", "agentworkbench", "web-apps", "sdk", "sandbox"],
+      "keywords": ["mini-app-sdk", "mini-web-app", "awb-sdk", "data-awb", "point-at-app", "app-commands", "read-mini-app-context", "run-mini-app-command"]
     }
   ]
 }
