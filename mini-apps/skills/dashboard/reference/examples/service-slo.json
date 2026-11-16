@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "title": "Service health and SLOs",
+  "description": "Which services breach the 99.5% availability and 250 ms p95 SLOs, when incidents hit, and how much error budget is spent.",
+  "sources": {
+    "metrics": { "url": "data/service_metrics.csv" }
+  },
+  "time": { "field": "ts", "default": "all", "presets": ["6h", "24h", "7d", "all"] },
+  "filters": ["service", "region"],
+  "measures": {
+    "requests": { "label": "Requests", "agg": "sum", "field": "requests", "format": "int" },
+    "errors": { "label": "Errors", "agg": "sum", "field": "errors", "format": "int", "good": "down" },
+    "error_budget": { "label": "Error budget (0.5% of requests)", "agg": "sum", "field": "requests", "scale": 0.005, "format": "int" },
+    "error_rate": { "label": "Error rate", "ratio": ["errors", "requests"], "format": "pct", "good": "down",
+                    "thresholds": { "warning": 0.004, "critical": 0.005 } },
+    "budget_used": { "label": "Error budget used", "ratio": ["errors", "error_budget"], "format": "pct", "good": "down",
+                     "thresholds": { "warning": 0.75, "critical": 1 } },
+    "p95": { "label": "p95 latency (request-weighted mean of 15-min p95)", "agg": "wavg", "field": "latency_p95_ms", "weight": "requests", "format": "ms", "good": "down",
+             "thresholds": { "warning": 220, "critical": 250 } },
+    "p50": { "label": "p50 latency (request-weighted)", "agg": "wavg", "field": "latency_p50_ms", "weight": "requests", "format": "ms", "good": "down" }
+  },
+  "panels": [
+    { "id": "k-err", "type": "kpi", "title": "Error rate", "measure": "error_rate" },
+    { "id": "k-budget", "type": "kpi", "title": "Error budget used", "measure": "budget_used" },
+    { "id": "k-p95", "type": "kpi", "title": "p95 latency", "measure": "p95" },
+    { "id": "k-req", "type": "kpi", "title": "Requests", "measure": "requests" },
+
+    { "id": "sec-slo", "type": "section", "title": "SLO status", "text": "Availability SLO 99.5% = error rate below 0.5%. Latency SLO: p95 at or below 250 ms." },
+    { "id": "slo-err", "type": "meter", "title": "Error rate vs the 0.5% limit", "measure": "error_rate", "by": "service", "target": 0.005, "sort": "worst", "w": 4, "h": 3 },
+    { "id": "slo-p95", "type": "meter", "title": "p95 vs 250 ms", "measure": "p95", "by": "service", "max": 600, "target": 250, "sort": "worst", "w": 4, "h": 3 },
+    { "id": "slo-budget", "type": "meter", "title": "Error budget used", "measure": "budget_used", "by": "service", "target": 1, "sort": "worst", "w": 4, "h": 3 },
+
+    { "id": "burn", "type": "budget", "title": "Error budget burn", "subtitle": "Errors so far against 0.5% of the window's requests; filter a service to see its own",
+      "measure": "errors", "budget": "error_budget", "w": 6, "h": 3 },
+    { "id": "err-trend", "type": "line", "title": "Error rate by service", "subtitle": "Hourly; drag across a spike to zoom", "x": "ts:hour", "y": "error_rate", "series": "service",
+      "marks": [{ "y": 0.005, "label": "SLO" }], "w": 6, "h": 3 },
+
+    { "id": "p95-trend", "type": "line", "title": "p95 latency by service", "subtitle": "Rising lines are drifting", "x": "ts:hour", "y": "p95", "series": "service",
+      "marks": [{ "y": 250, "label": "SLO" }], "w": 8, "h": 3 },
+    { "id": "where", "type": "heatmap", "title": "Error rate: service by region", "x": "region", "y": "service", "measure": "error_rate", "labels": true, "w": 4, "h": 3 },
+
+    { "id": "sec-traffic", "type": "section", "title": "Traffic" },
+    { "id": "traffic", "type": "area", "title": "Requests by region", "x": "ts:hour", "y": "requests", "series": "region", "stack": true, "w": 8, "h": 3 },
+    { "id": "by-hour", "type": "heatmap", "title": "Error rate by hour of day", "x": "ts:hour_of_day", "y": "service", "measure": "error_rate", "w": 4, "h": 3 },
+
+    { "id": "scorecard", "type": "table", "title": "SLO scorecard", "dims": ["service"], "measures": ["requests", "errors", "error_rate", "budget_used", "p50", "p95"],
+      "sort": "error_rate", "bars": true, "w": 12, "h": 3 }
+  ]
+}

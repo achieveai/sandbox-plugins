@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "title": "Product funnel and retention",
+  "description": "How visitors become subscribers by channel, platform and country, whether the late-September onboarding change lifted activation, and how weekly signup cohorts retain.",
+  "sources": {
+    "events": { "url": "data/product_events.csv", "types": { "user_id": "string" } },
+    "users": { "url": "api/users", "format": "json", "timeField": "first_seen" }
+  },
+  "time": { "field": "date", "default": "all", "presets": ["30d", "90d", "all"] },
+  "filters": ["channel", "platform", "country"],
+  "measures": {
+    "visitors": { "label": "Visitors", "agg": "count_distinct", "field": "user_id", "where": { "event": "visit" }, "format": "int" },
+    "signups": { "label": "Signups", "agg": "count_distinct", "field": "user_id", "where": { "event": "signup" }, "format": "int" },
+    "activations": { "label": "Activated", "agg": "count_distinct", "field": "user_id", "where": { "event": "activate" }, "format": "int" },
+    "subscribers": { "label": "Subscribers", "agg": "count_distinct", "field": "user_id", "where": { "event": "subscribe" }, "format": "int" },
+    "visit_to_signup": { "label": "Visit to signup", "ratio": ["signups", "visitors"], "format": "pct" },
+    "signup_to_activate": { "label": "Signup to activation", "ratio": ["activations", "signups"], "format": "pct" },
+    "visit_to_sub": { "label": "Visit to subscribe", "ratio": ["subscribers", "visitors"], "format": "pct" },
+    "users": { "label": "Users", "agg": "count", "format": "int" }
+  },
+  "panels": [
+    { "id": "k-visitors", "type": "kpi", "title": "Visitors", "measure": "visitors" },
+    { "id": "k-signup", "type": "kpi", "title": "Visit to signup", "measure": "visit_to_signup" },
+    { "id": "k-activate", "type": "kpi", "title": "Signup to activation", "measure": "signup_to_activate" },
+    { "id": "k-sub", "type": "kpi", "title": "Visit to subscribe", "measure": "visit_to_sub" },
+
+    { "id": "funnel", "type": "funnel", "title": "Visit to subscribe", "subtitle": "Users whose first visit is in the range, followed to any later step", "cohort": "user_id",
+      "steps": [{ "label": "Visit", "measure": "visitors" }, { "label": "Signup", "measure": "signups" },
+                { "label": "Activate", "measure": "activations" }, { "label": "Subscribe", "measure": "subscribers" }], "w": 5, "h": 3 },
+    { "id": "by-channel", "type": "bar", "title": "Step conversion by channel", "x": "channel", "y": ["visit_to_signup", "signup_to_activate", "visit_to_sub"], "w": 7, "h": 3 },
+
+    { "id": "flow", "type": "flow", "title": "Channel to furthest step", "subtitle": "Each user once, by first visit date; click a channel to filter", "source": "users",
+      "path": ["channel", "furthest_step"], "measure": "users", "w": 12, "h": 4 },
+
+    { "id": "sec-onb", "type": "section", "title": "Did onboarding improve activation?" },
+    { "id": "act-trend", "type": "line", "title": "Weekly signup to activation", "subtitle": "Activations and signups counted in the week they happen", "x": "date:week", "y": "signup_to_activate",
+      "events": [{ "x": "2026-09-21", "label": "Onboarding change" }], "w": 8, "h": 3 },
+    { "id": "signups-week", "type": "bar", "title": "Signups per week", "x": "date:week", "y": "signups", "w": 4, "h": 3 },
+
+    { "id": "retention", "type": "retention", "title": "Weekly signup cohorts: share active again", "user": "user_id", "time": "date",
+      "start": { "event": "signup" }, "return": { "event": "active" }, "grain": "week", "periods": 8, "w": 12, "h": 4 },
+
+    { "id": "countries", "type": "table", "title": "Conversion by country", "dims": ["country"], "measures": ["visitors", "signups", "subscribers", "visit_to_signup", "visit_to_sub"],
+      "sort": "visit_to_sub", "bars": true, "w": 12, "h": 3 }
+  ]
+}

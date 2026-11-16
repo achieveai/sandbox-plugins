@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard</title>
+<link rel="stylesheet" href="static/awb-dash.css">
+</head>
+<body>
+<main id="dash" aria-live="polite"><p style="font:14px system-ui;padding:16px">Loading dashboard…</p></main>
+<!-- AWB Mini App SDK: served by AWB in the chat; missing (404) elsewhere, and the dashboard works without it. -->
+<script src="/_awb/sdk.js"></script>
+<script src="static/echarts.min.js"></script>
+<script src="static/awb-dash.js"></script>
+<script src="static/custom.js"></script>
+<script>
+  AwbDash.render('#dash', 'dashboard.json').then(function (d) { document.title = d.spec.title || 'Dashboard'; });
+</script>
+</body>
+</html>

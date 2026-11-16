@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "title": "LLM usage across the organization",
+  "description": "Spend, requests and errors by team, model and app, and how this month tracks against the $900 budget. Click any bar, slice or row to filter everything; drag across a time chart to zoom.",
+  "sources": {
+    "usage": { "url": "data/llm_usage.csv" }
+  },
+  "time": { "field": "date", "default": "30d", "presets": ["7d", "30d", "90d", "mtd", "all"] },
+  "filters": ["team", "model", "app"],
+  "measures": {
+    "cost": { "label": "Spend", "agg": "sum", "field": "cost_usd", "format": "usd", "good": "down" },
+    "requests": { "label": "Requests", "agg": "sum", "field": "requests", "format": "int" },
+    "tokens_in": { "label": "Input tokens", "agg": "sum", "field": "input_tokens", "format": "tokens" },
+    "tokens_out": { "label": "Output tokens", "agg": "sum", "field": "output_tokens", "format": "tokens" },
+    "users": { "label": "Active users", "agg": "count_distinct", "field": "user", "format": "int" },
+    "errors": { "label": "Errors", "agg": "sum", "field": "errors", "format": "int", "good": "down" },
+    "error_rate": { "label": "Error rate", "ratio": ["errors", "requests"], "format": "pct", "good": "down",
+                    "thresholds": { "warning": 0.015, "critical": 0.03 } },
+    "cost_per_req": { "label": "Cost per request", "ratio": ["cost", "requests"], "format": "usd", "good": "down" },
+    "latency": { "label": "Latency (request-weighted)", "agg": "wavg", "field": "latency_ms", "weight": "requests", "format": "ms", "good": "down" }
+  },
+  "panels": [
+    { "id": "spend", "type": "kpi", "title": "Spend", "measure": "cost" },
+    { "id": "reqs", "type": "kpi", "title": "Requests", "measure": "requests" },
+    { "id": "active", "type": "kpi", "title": "Active users", "measure": "users" },
+    { "id": "errs", "type": "kpi", "title": "Error rate", "measure": "error_rate" },
+
+    { "id": "budget", "type": "budget", "title": "This month vs the $900 budget", "subtitle": "Always the current month; ignores the time picker, follows the filters",
+      "measure": "cost", "budget": 900, "period": "mtd", "w": 6, "h": 3 },
+    { "id": "spend-share", "type": "waffle", "title": "Who spends it", "subtitle": "Each square is 1% of spend in the range", "dim": "team", "measure": "cost", "limit": 6, "w": 6, "h": 3 },
+
+    { "id": "spend-trend", "type": "area", "title": "Daily spend by model", "subtitle": "Drag across to zoom", "x": "date:day", "y": "cost", "series": "model", "stack": true, "w": 12, "h": 3,
+      "events": [{ "x": "2026-10-16", "label": "Support moves to Haiku" }] },
+
+    { "id": "unit", "type": "callout", "title": "Unit cost", "measure": "cost_per_req", "icon": "cost", "text": "average cost per request across {{requests}} requests", "w": 5, "h": 1 },
+    { "id": "notes", "type": "text", "title": "How to read this", "w": 7, "h": 1,
+      "text": "Spend is list price. **Error rate** above 1.5% is a warning. Click a team bar to see its users. The budget panel always shows the current month." },
+
+    { "id": "by-team", "type": "bar", "title": "Spend by team", "subtitle": "Click a team to drill into its users", "x": "team", "y": "cost", "drill": ["team", "user"], "w": 6, "h": 3 },
+    { "id": "eff", "type": "scatter", "title": "Volume vs unit cost by user", "by": "user", "x": "requests", "y": "cost_per_req", "size": "cost", "limit": 60, "labels": 4, "w": 6, "h": 3 },
+
+    { "id": "weekday", "type": "heatmap", "title": "Requests by weekday and team", "x": "date:weekday", "y": "team", "measure": "requests", "w": 6, "h": 3 },
+    { "id": "mix", "type": "treemap", "title": "Spend by app and model", "dims": ["app", "model"], "measure": "cost", "w": 6, "h": 3 },
+
+    { "id": "models", "type": "table", "title": "Models", "dims": ["model"], "measures": ["requests", "tokens_in", "tokens_out", "cost", "cost_per_req", "error_rate", "latency"], "w": 12, "h": 3 }
+  ]
+}
